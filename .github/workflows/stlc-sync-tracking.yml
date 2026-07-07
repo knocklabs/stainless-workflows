@@ -1,0 +1,120 @@
+name: Sync custom-code tracking with staging
+
+# Reusable (workflow_call) scheduled sync, shared across Knock's Stainless
+# config repos. Each config repo keeps a thin caller workflow that owns the
+# schedule / dispatch triggers and delegates to this one; see
+# examples/stlc-sync-tracking.yml.
+#
+# Polls the SDK staging repos for custom-code changes that landed and opens a
+# seal-back PR that updates the calling config repo's tracking files to match.
+#
+# Adapted from stainless/stlc examples/config-repo/.github/workflows/stlc-sync-tracking.yml.
+# See the transition guide's promote doc for the rationale and for alternatives
+# if you want live propagation (the SDK repo's optional seal-dispatch.yml).
+on:
+  workflow_call:
+    inputs:
+      workspace:
+        description: 'Path to the stainless workspace (contains workspace.json, builds/).'
+        type: string
+        default: stainless
+      targets:
+        description: '`all` builds every configured target, or a comma-separated subset.'
+        type: string
+        default: all
+    secrets:
+      STLC_READ_TOKEN:
+        description: 'PAT with Contents:Read on stainless/stlc* repos. Consumed by the caller repo''s ./.github/actions/setup-stlc.'
+        required: true
+      SDK_WRITE_TOKEN:
+        description: 'Token with write access to the SDK staging/production repos.'
+        required: true
+
+permissions:
+  contents: write       # open the seal-back PR on the calling config repo
+  pull-requests: write
+
+concurrency:
+  # One rolling sync at a time; a newer run supersedes an in-flight one.
+  # Scoped per repository, so each config repo has its own single-flight lane.
+  group: stlc-sync-tracking
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout config repo
+        # No `repository:` arg → checks out the CALLER's config repo, bringing
+        # its stainless/ workspace and its own .github/actions/setup-stlc.
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup stlc
+        # `./` resolves against the checked-out CALLER repo (its own setup-stlc).
+        uses: ./.github/actions/setup-stlc
+        with:
+          stlc-read-token: ${{ secrets.STLC_READ_TOKEN }}
+
+      - name: Configure auth to read the SDK staging repos
+        env:
+          GH_TOKEN: ${{ secrets.SDK_WRITE_TOKEN }}
+        run: |
+          git config --global user.name "knock-eng-bot"
+          git config --global user.email "ops-development@knock.app"
+          gh auth setup-git
+
+      - name: Absorb staging changes and re-seal
+        # `stlc build` fetches each staging repo and advances the tracking files
+        # past any out-of-band commits on staging `main`, then re-seals. With no
+        # spec change this is a no-op; when staging has drifted, the tracking
+        # files under <workspace>/custom-code/ change. `--push` so the re-sealed
+        # refs reach staging; the branch push is a no-op when already in sync.
+        working-directory: ${{ inputs.workspace }}
+        env:
+          GH_TOKEN: ${{ secrets.SDK_WRITE_TOKEN }}
+          DEFAULT_TARGETS: ${{ inputs.targets }}
+        run: |
+          stlc build \
+            --branch main \
+            --output /tmp/sdk-output \
+            --push \
+            --targets "$DEFAULT_TARGETS"
+
+      - name: Seal tracking files back to the config repo
+        # Same seal-back step as stlc-generate.yml: `main` is protected, so open
+        # a PR with the updated tracking files (shared `stlc/seal-tracking`
+        # branch, so there's a single seal-back PR regardless of which workflow
+        # opened it). Pushes with the config GITHUB_TOKEN.
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          STAINLESS_WORKSPACE: ${{ inputs.workspace }}
+        run: |
+          if [ -z "$(git status --porcelain -- "$STAINLESS_WORKSPACE/custom-code")" ]; then
+            echo "Tracking files already in sync with staging — nothing to seal."
+            exit 0
+          fi
+          branch="stlc/seal-tracking"
+          git checkout -B "$branch"
+          git add "$STAINLESS_WORKSPACE/custom-code"
+          git commit -m "chore(stlc): seal custom-code tracking files"
+          git push --force "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "$branch"
+          open_pr=$(gh pr list --head "$branch" --state open --json number --jq '.[0].number // empty')
+          if [ -z "$open_pr" ]; then
+            gh pr create --base main --head "$branch" \
+              --title "chore(stlc): seal custom-code tracking files" \
+              --body "Automated: this config repo's custom-code tracking files are out of date with the SDK staging repos (for example, an out-of-band staging change or a contribution cherry-picked from production). This updates $STAINLESS_WORKSPACE/custom-code/ to match. Safe to merge — the generate workflow skips tracking-files-only commits."
+          fi
+          # Land the seal-back automatically so the tracking files don't sit
+          # stale behind the SDK repos. Stale tracking is what lets a later
+          # build replay an out-of-date `integrated` and drop custom code, so
+          # keeping it current is a correctness measure, not just convenience.
+          # The PR is tracking-files-only, so the generate workflow's guard
+          # skips it — auto-merging cannot cause a build loop. Best-effort: if
+          # the repo hasn't enabled auto-merge, warn and leave it for a human.
+          if ! gh pr merge --auto --squash "$branch" 2>/dev/null; then
+            echo "::warning::Could not enable auto-merge for $branch. Merge it promptly: stale custom-code tracking files can cause a later build to drop custom code."
+          fi

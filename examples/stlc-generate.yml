@@ -1,0 +1,37 @@
+# Copy this file into a Stainless config repo as:
+#   .github/workflows/stlc-generate.yml
+#
+# It owns the triggers (which cannot be externalized to a reusable workflow)
+# and the `paths:` filters, then delegates all logic to the shared reusable
+# workflow. Pin the `@` ref to a tag once the shared repo stabilizes.
+name: Generate SDKs with stlc
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'stainless/**'
+      - '.github/workflows/stlc-generate.yml'
+      - '.github/actions/setup-stlc/**'
+  push:
+    branches: [main]
+    paths:
+      - 'stainless/**'
+      - '.github/workflows/stlc-generate.yml'
+      - '.github/actions/setup-stlc/**'
+
+jobs:
+  generate:
+    # Grant the GITHUB_TOKEN scopes the reusable workflow needs. The reusable
+    # workflow can only ever narrow these, never widen them.
+    permissions:
+      contents: write
+      pull-requests: write
+      id-token: write
+    uses: knocklabs/stainless-workflows/.github/workflows/stlc-generate.yml@main
+    # Forwards STLC_READ_TOKEN and SDK_WRITE_TOKEN from this repo's secrets.
+    secrets: inherit
+    # Optional — omit to accept the defaults shown:
+    # with:
+    #   workspace: stainless
+    #   targets: all

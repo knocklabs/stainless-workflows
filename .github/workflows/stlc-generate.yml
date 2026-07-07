@@ -1,0 +1,270 @@
+name: Generate SDKs with stlc
+
+# Reusable (workflow_call) codegen pipeline, shared across Knock's Stainless
+# config repos (stainless-knock-mapi, stainless-knock-api, ...). Each config
+# repo keeps a thin caller workflow that owns the triggers (pull_request /
+# push) and delegates to this one; see examples/stlc-generate.yml.
+#
+# Generates SDKs for all configured targets and syncs to SDK staging repos.
+# On pull_request (in the caller): pushes to a preview branch on each staging
+# repo and sticky-comments diff links onto the PR. On push to main: pushes
+# directly to main on each staging repo (the per-language Promote workflow then
+# opens a release PR to production).
+#
+# Adapted from stainless/stlc examples/config-repo/.github/workflows/stlc-generate.yml.
+# Commit identity (knock-eng-bot) is centralized here so every config repo
+# shares it; the config filename is read from the workspace's workspace.json.
+on:
+  workflow_call:
+    inputs:
+      workspace:
+        description: 'Path to the stainless workspace (contains workspace.json, builds/). Defaults to the layout every Knock config repo uses.'
+        type: string
+        default: stainless
+      targets:
+        description: '`all` builds every configured target, or a comma-separated subset (e.g. "typescript,python,go").'
+        type: string
+        default: all
+    secrets:
+      STLC_READ_TOKEN:
+        description: 'PAT with Contents:Read on stainless/stlc* repos. Consumed by the caller repo''s ./.github/actions/setup-stlc to fetch the stlc CLI family.'
+        required: true
+      SDK_WRITE_TOKEN:
+        description: 'Token with write access to the SDK staging/production repos.'
+        required: true
+
+concurrency:
+  # `github.workflow` resolves to the CALLER's workflow, and concurrency is
+  # scoped per repository, so each config repo gets its own group — mapi and
+  # api never contend with each other.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  # Last write wins: a newer push (or PR sync) cancels an in-progress run on the
+  # same ref, so the seal-back PR always reflects the latest main and an older,
+  # slower run can't clobber it with stale tracking files. A superseded run may
+  # have pushed some staging repos already; that's transient — the newest run
+  # pushes the correct latest state.
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  pull-requests: write
+  id-token: write
+
+jobs:
+  # Loop-breaker: skipping commits that touch only <workspace>/custom-code/**
+  # means merging the seal-back PR won't re-trigger generate endlessly.
+  guard:
+    runs-on: ubuntu-latest
+    outputs:
+      skip: ${{ steps.check.outputs.skip }}
+    steps:
+      - name: Decide whether this push only changed tracking files
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+          WORKSPACE: ${{ inputs.workspace }}
+        run: |
+          # Only a push to main can be a reconcile commit; PR runs always proceed.
+          if [ "$EVENT" != "push" ]; then echo "skip=false" >> "$GITHUB_OUTPUT"; exit 0; fi
+          if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          changed=$(gh api "repos/$REPO/compare/$BEFORE...$AFTER" --jq '.files[].filename')
+          echo "Changed files:"; printf '%s\n' "$changed"
+          if [ -n "$changed" ] && ! printf '%s\n' "$changed" | grep -qvE "^${WORKSPACE}/custom-code/"; then
+            echo "Only tracking files changed — skipping regeneration (loop-breaker)."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  generate:
+    needs: guard
+    if: ${{ needs.guard.outputs.skip != 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        # No `repository:` arg → checks out the CALLER's config repo at the
+        # triggering ref, bringing its stainless/ workspace and its own
+        # .github/actions/setup-stlc into the workspace.
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup stlc
+        # `./` resolves against the checked-out CALLER repo, so each config repo
+        # runs its OWN setup-stlc (and thus its own language toolchains).
+        uses: ./.github/actions/setup-stlc
+        with:
+          stlc-read-token: ${{ secrets.STLC_READ_TOKEN }}
+
+      - name: Configure auth for stlc to push to SDK repos
+        env:
+          GH_TOKEN: ${{ secrets.SDK_WRITE_TOKEN }}
+        run: |
+          git config --global user.name "knock-eng-bot"
+          git config --global user.email "ops-development@knock.app"
+          gh auth setup-git
+
+      - name: Resolve commit message
+        # Use the merged PR's title as the SDK commit subject; works across
+        # squash/merge/rebase strategies. Falls back to HEAD for direct pushes.
+        id: msg
+        if: github.event_name == 'push'
+        env:
+          SHA: ${{ github.sha }}
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FALLBACK: ${{ github.event.head_commit.message }}
+        run: |
+          pr_title=$(gh api "repos/$REPO/commits/$SHA/pulls" --jq '.[0].title // empty')
+
+          if [ -n "$pr_title" ]; then
+            commit_msg="$pr_title"
+          else
+            commit_msg="$FALLBACK"
+          fi
+
+          {
+            echo "commit_msg<<MSG_EOF"
+            echo "$commit_msg"
+            echo "MSG_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Hold codegen while production is ahead (release not back-synced)
+        # Codegen pushes DIRECTLY to staging `main` below, so the `trunk-synced`
+        # PR gate (which covers human custom-code PRs) doesn't apply to it. This
+        # is the codegen-side guard: for each two-repo target, refuse to build if
+        # production `main` is ahead of the staging trunk — i.e. a release hasn't
+        # been back-synced yet. Otherwise codegen would advance staging
+        # independently and fork the trunks. The step re-runs cleanly once the
+        # back-sync catches up. Only runs on push to main; previews are exempt
+        # (they go to ephemeral preview branches, not the trunk).
+        # `jq`/`yq` are preinstalled on ubuntu-latest runners.
+        if: github.event_name == 'push'
+        working-directory: ${{ inputs.workspace }}
+        env:
+          GH_TOKEN: ${{ secrets.SDK_WRITE_TOKEN }}
+        run: |
+          set -euo pipefail
+          # The stainless config filename is repo-declared in workspace.json.
+          config_file=$(jq -r '.stainless_config' workspace.json)
+          held=""
+          while IFS=$'\t' read -r target staging prod; do
+            # Skip one-repo targets (staging == production) and targets with no production repo.
+            { [ -z "$prod" ] || [ "$prod" = "null" ] || [ "$staging" = "$prod" ]; } && continue
+            d=$(mktemp -d); git -C "$d" init -q
+            git -C "$d" remote add staging "https://x-access-token:${GH_TOKEN}@github.com/${staging}.git"
+            git -C "$d" remote add prod "https://x-access-token:${GH_TOKEN}@github.com/${prod}.git"
+            git -C "$d" fetch -q staging main || { rm -rf "$d"; continue; }
+            # No production main yet (first release not cut) → nothing to be ahead of.
+            git -C "$d" fetch -q prod main || { rm -rf "$d"; continue; }
+            if ! git -C "$d" merge-base --is-ancestor prod/main staging/main; then
+              held="$held $target"
+            fi
+            rm -rf "$d"
+          done < <(yq -r '.targets | to_entries[] | [.key, (.value.staging_repo // .value.production_repo), (.value.production_repo // .value.staging_repo)] | @tsv' "$config_file")
+          if [ -n "$held" ]; then
+            echo "::error title=Codegen held::production is ahead of the staging trunk (a release isn't back-synced yet) for:$held. Wait for the back-sync, then re-run."
+            exit 1
+          fi
+          echo "All targets are in sync with production — proceeding to build."
+
+      - name: Generate SDKs and push
+        env:
+          # PR head ref on pull_request (preview branch), "main" on push.
+          BRANCH: ${{ github.event.pull_request.head.ref || github.ref_name }}
+          COMMIT_MSG: ${{ steps.msg.outputs.commit_msg }}
+          GH_TOKEN: ${{ secrets.SDK_WRITE_TOKEN }}
+          DEFAULT_TARGETS: ${{ inputs.targets }}
+        working-directory: ${{ inputs.workspace }}
+        run: |
+          echo "Building targets: $DEFAULT_TARGETS to branch: $BRANCH"
+          commit_args=()
+          if [ -n "$COMMIT_MSG" ]; then
+            commit_args=(--commit "$COMMIT_MSG")
+          fi
+          # --trunk-branch marks the branch that gets promoted to production.
+          # Every other branch is treated as an ephemeral preview branch, so a
+          # rebuild of the same PR overwrites its own prior preview tip instead
+          # of failing non-fast-forward. Change this if your trunk isn't `main`.
+          stlc build \
+            --branch "$BRANCH" \
+            --trunk-branch main \
+            --output /tmp/sdk-output \
+            --push \
+            --targets "$DEFAULT_TARGETS" \
+            "${commit_args[@]}"
+
+      - name: Render build manifest
+        # Renders the latest manifest to the Actions Summary and to a file
+        # for the sticky PR comment. continue-on-error so a missing manifest
+        # (build aborted before writing one) doesn't mask the real failure.
+        id: manifest
+        if: always() && github.event_name == 'pull_request'
+        continue-on-error: true
+        working-directory: ${{ inputs.workspace }}
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if ! stlc show --renderer=markdown --workflow-run-url "$RUN_URL" > /tmp/build-manifest.md; then
+            {
+              echo "## stlc build manifest"
+              echo ""
+              echo "Manifest render failed — no sticky comment will be posted."
+              echo "See the \"Generate SDKs and push\" step above for the underlying error."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          cat /tmp/build-manifest.md
+          cat /tmp/build-manifest.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Comment build manifest on PR
+        # `header` identifies the comment so subsequent runs update in place.
+        if: always() && steps.manifest.outcome == 'success'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: stlc-build-manifest
+          path: /tmp/build-manifest.md
+
+      - name: Seal tracking files back to the config repo
+        # On push to main, `stlc build` re-seals custom code and rewrites the
+        # tracking files under <workspace>/custom-code/. `main` is protected, so
+        # open a PR with them rather than committing directly. Merging it won't
+        # loop — the `guard` job skips tracking-files-only pushes. Pushes with
+        # the per-repo GITHUB_TOKEN (config repo), not SDK_WRITE_TOKEN.
+        if: ${{ success() && github.event_name == 'push' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          STAINLESS_WORKSPACE: ${{ inputs.workspace }}
+        run: |
+          if [ -z "$(git status --porcelain -- "$STAINLESS_WORKSPACE/custom-code")" ]; then
+            echo "Tracking files already in sync — nothing to seal."
+            exit 0
+          fi
+          branch="stlc/seal-tracking"
+          git checkout -B "$branch"
+          git add "$STAINLESS_WORKSPACE/custom-code"
+          git commit -m "chore(stlc): seal custom-code tracking files"
+          git push --force "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "$branch"
+          open_pr=$(gh pr list --head "$branch" --state open --json number --jq '.[0].number // empty')
+          if [ -z "$open_pr" ]; then
+            gh pr create --base main --head "$branch" \
+              --title "chore(stlc): seal custom-code tracking files" \
+              --body "Automated by the stlc generate workflow: \`stlc build\` re-sealed custom code on the last push to \`main\`, updating the tracking files under \`$STAINLESS_WORKSPACE/custom-code/\`. Merging brings the config repo in sync with the SDK repos. Safe to merge — tracking-files-only commits are skipped by this workflow, so it won't trigger another build."
+          fi
+          # Land the seal-back automatically so the tracking files don't sit
+          # stale behind the SDK repos. Stale tracking is what lets a later
+          # build replay an out-of-date `integrated` and drop custom code, so
+          # keeping it current is a correctness measure, not just convenience.
+          # The PR is tracking-files-only, so the guard job skips it —
+          # auto-merging cannot cause a build loop. Best-effort: if the repo
+          # hasn't enabled auto-merge, warn and leave it for a human.
+          if ! gh pr merge --auto --squash "$branch" 2>/dev/null; then
+            echo "::warning::Could not enable auto-merge for $branch. Merge it promptly: stale custom-code tracking files can cause a later build to drop custom code."
+          fi

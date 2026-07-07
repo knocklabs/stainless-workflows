@@ -1,0 +1,30 @@
+# Copy this file into a Stainless config repo as:
+#   .github/workflows/stlc-sync-tracking.yml
+#
+# It owns the schedule / dispatch triggers and delegates all logic to the
+# shared reusable workflow. Tune the cron cadence per repo — it lives here,
+# not in the shared workflow. Pin the `@` ref to a tag once the shared repo
+# stabilizes.
+name: Sync custom-code tracking with staging
+
+on:
+  schedule:
+    # A poll, not a release — tune to how often contributions land on staging.
+    - cron: '0 */6 * * *'
+  workflow_dispatch: {}
+  # Eager reseal: the SDK repo's optional seal-dispatch.yml fires this the moment
+  # out-of-band custom code lands on staging main, instead of waiting for the poll.
+  repository_dispatch:
+    types: [seal-custom-code]
+
+jobs:
+  sync:
+    permissions:
+      contents: write
+      pull-requests: write
+    uses: knocklabs/stainless-workflows/.github/workflows/stlc-sync-tracking.yml@main
+    secrets: inherit
+    # Optional — omit to accept the defaults shown:
+    # with:
+    #   workspace: stainless
+    #   targets: all
