@@ -1,0 +1,67 @@
+name: Trunk sync lock
+
+# Reusable (workflow_call): posts a `trunk-synced` commit status to open PRs
+# targeting staging `main` — red while production is ahead of staging (a
+# release hasn't been synced back yet), green once they are in sync. Make
+# `trunk-synced` a required status check on staging `main` to block merges
+# onto a stale trunk during the release window.
+#
+# This only gates PRs, not direct pushes. The back-sync bypasses this check by
+# pushing to staging `main` directly. If staging `main` also requires a pull
+# request, give the back-sync's identity ruleset-bypass so it can push. Never
+# route the back-sync through a PR gated by this check, or it deadlocks.
+#
+# Called from each staging SDK repo's caller stub (see
+# examples/sdk-repo/trunk-sync-lock.yml), which owns the triggers and the
+# `statuses: write` / `pull-requests: read` permissions.
+#
+# Adapted from stainless/stlc examples/sdk-repo/.github/workflows/trunk-sync-lock.yml.
+on:
+  workflow_call:
+    inputs:
+      production_repo:
+        description: 'Production repo to compare against, as owner/name (e.g. knocklabs/knock-mgmt-node).'
+        required: true
+        type: string
+    secrets:
+      PRODUCTION_REPO_TOKEN:
+        description: 'Only needed if the production repo is PRIVATE: a token that can read it. Public production repos are fetched anonymously.'
+        required: false
+
+jobs:
+  lock:
+    runs-on: ubuntu-latest
+    env:
+      PRODUCTION_REPO: ${{ inputs.production_repo }}
+      PRODUCTION_READ_TOKEN: ${{ secrets.PRODUCTION_REPO_TOKEN }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Evaluate sync state and post status to open main PRs
+        run: |
+          set -euo pipefail
+          # A public production repo is readable with no credential. If the
+          # caller forwarded PRODUCTION_REPO_TOKEN (private production), use it.
+          if [ -n "${PRODUCTION_READ_TOKEN:-}" ]; then
+            git remote add production \
+              "https://x-access-token:${PRODUCTION_READ_TOKEN}@github.com/${PRODUCTION_REPO}.git"
+          else
+            git remote add production "https://github.com/${PRODUCTION_REPO}.git"
+          fi
+          git fetch --no-tags production main
+          if git merge-base --is-ancestor production/main HEAD; then
+            state=success; desc="staging main is in sync with production"
+          else
+            state=failure; desc="production is ahead — wait for the back-sync before merging"
+          fi
+          echo "trunk-synced => $state ($desc)"
+          shas=$(gh pr list --repo "$GITHUB_REPOSITORY" --base main --state open --json headRefOid --jq '.[].headRefOid')
+          if [ -z "$shas" ]; then echo "no open PRs targeting main"; exit 0; fi
+          for sha in $shas; do
+            gh api -X POST "repos/$GITHUB_REPOSITORY/statuses/$sha" \
+              -f state="$state" -f context="trunk-synced" -f description="$desc" >/dev/null
+            echo "posted trunk-synced=$state to $sha"
+          done

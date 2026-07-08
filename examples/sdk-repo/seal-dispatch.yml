@@ -1,0 +1,35 @@
+# OPTIONAL — copy this file into a STAGING SDK repo as:
+#   .github/workflows/seal-dispatch.yml
+# and seal it with `stlc build` like any custom code.
+#
+# Eagerly notifies the config repo to reseal custom-code tracking files when
+# out-of-band custom code lands on staging `main`, instead of waiting for the
+# config repo's scheduled poll (stlc-sync-tracking.yml). Skip this file to
+# rely on the poll alone.
+#
+# Replace the hardcoded repo names (this example uses the mAPI node target):
+#   knocklabs/knock-mgmt-node-staging  → your staging repo (the `if:` guard)
+#   knocklabs/stainless-knock-mapi     → your config repo
+#     (for the public API family: knocklabs/stainless-knock-api)
+name: Seal custom code (dispatch)
+
+on:
+  push:
+    # main only. stlc preview/integrated/codegen branches never push to main.
+    branches: [main]
+
+concurrency:
+  group: seal-dispatch-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    # Self-routing guard: must name the STAGING repo.
+    if: github.repository == 'knocklabs/knock-mgmt-node-staging'
+    permissions:
+      contents: read
+    uses: knocklabs/stainless-workflows/.github/workflows/seal-dispatch.yml@main
+    with:
+      config_repo: knocklabs/stainless-knock-mapi
+    # Forwards CONFIG_DISPATCH_TOKEN (repository_dispatch to the config repo).
+    secrets: inherit

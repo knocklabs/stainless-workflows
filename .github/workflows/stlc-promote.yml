@@ -1,0 +1,80 @@
+name: Promote SDKs
+
+# Reusable (workflow_call) implementation of the stlc promote: fast-forward
+# production `main` up to the staging trunk, preserving commit SHAs. Because
+# the SHAs are preserved, production `main` and staging `main` stay identical
+# and linear, the sealed custom-code commit stays an ancestor of both, and
+# there is no divergence to heal on the next `stlc build`.
+#
+# Called from each staging SDK repo's caller stub (see
+# examples/sdk-repo/stlc-promote.yml), which owns the workflow_dispatch
+# trigger, the self-routing repo guard, and permissions.
+#
+# Adapted from stainless/stlc examples/sdk-repo/.github/workflows/stlc-promote.yml.
+on:
+  workflow_call:
+    inputs:
+      production_repo:
+        description: 'Production repo to fast-forward, as owner/name (e.g. knocklabs/knock-mgmt-node).'
+        required: true
+        type: string
+    secrets:
+      PRODUCTION_REPO_TOKEN:
+        description: 'Token with Contents: write on the production repo — performs the fast-forward push.'
+        required: true
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    # Optional approval gate: `environment` is evaluated against the CALLER
+    # repo, so add required reviewers to the staging repo's `production`
+    # environment to gate each promote run. With no reviewers configured it
+    # only scopes secrets/variables and adds no gate — the manual dispatch in
+    # the stub is then the only checkpoint. (This must live here rather than
+    # in the stub: a caller job that `uses:` a reusable workflow cannot set
+    # `environment`.)
+    environment: production
+    env:
+      PRODUCTION_REPO: ${{ inputs.production_repo }}
+      GH_TOKEN: ${{ secrets.PRODUCTION_REPO_TOKEN }}
+    steps:
+      - name: Check out staging
+        # No `repository:` arg → checks out the CALLER's staging repo.
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fetch production main
+        run: |
+          git remote add production \
+            "https://x-access-token:${GH_TOKEN}@github.com/${PRODUCTION_REPO}.git"
+          git fetch production main
+
+      - name: Check whether production already has staging's content
+        id: diff
+        run: |
+          # After a release, production carries release-please's version/changelog
+          # commits that staging lacks. Ask whether merging staging into production
+          # would change production's tree: if not, production already has staging's content.
+          MERGED=$(git merge-tree --write-tree production/main origin/main) || MERGED=conflict
+          PRODUCTION_TREE=$(git rev-parse 'production/main^{tree}')
+          if [ "$MERGED" = "$PRODUCTION_TREE" ]; then
+            echo "Production already contains staging's content. Nothing to promote."
+            echo "synced=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "synced=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Promote staging to production (fast-forward)
+        if: steps.diff.outputs.synced == 'false'
+        run: |
+          # Refuse unless production/main is an ancestor of staging/main. If it
+          # isn't, the trunks have forked (someone advanced production out of
+          # band without back-syncing first) and a fast-forward is unsafe.
+          if ! git merge-base --is-ancestor production/main origin/main; then
+            echo "::error title=Promote blocked::production/main is not an ancestor of staging main. Back-sync production into staging first."
+            exit 1
+          fi
+          git push production origin/main:refs/heads/main
+          echo "Fast-forwarded production/main to staging/main."

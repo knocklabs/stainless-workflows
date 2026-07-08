@@ -1,0 +1,79 @@
+name: Seal custom code (dispatch)
+
+# Reusable (workflow_call): optional, eager variant of the config repo's
+# scheduled tracking-file sync.
+#
+# When genuine out-of-band custom code is merged to the staging SDK repo's
+# `main` (a direct staging commit, or a contribution pulled back from
+# production), notify the config repo to reseal so the custom-code tracking
+# JSON absorbs it promptly instead of waiting for the config repo's poll. The
+# receiving end is stlc-sync-tracking.yml's `repository_dispatch` listener
+# (event type `seal-custom-code`). Bot-authored pushes are skipped by the loop
+# guards below, so codegen's own pushes cannot trigger a reseal loop.
+#
+# Called from each staging SDK repo's caller stub (see
+# examples/sdk-repo/seal-dispatch.yml). Skip the stub entirely if you'd rather
+# rely on the config repo's scheduled poll alone.
+#
+# Adapted from stainless/stlc examples/sdk-repo/.github/workflows/seal-dispatch.yml.
+on:
+  workflow_call:
+    inputs:
+      config_repo:
+        description: 'Config repo to notify, as owner/name (e.g. knocklabs/stainless-knock-mapi).'
+        required: true
+        type: string
+    secrets:
+      CONFIG_DISPATCH_TOKEN:
+        description: 'Token that can send a repository_dispatch to the config repo.'
+        required: true
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    env:
+      CONFIG_REPO: ${{ inputs.config_repo }}
+    steps:
+      - name: Loop-guard and send reseal dispatch
+        env:
+          DISPATCH_TOKEN: ${{ secrets.CONFIG_DISPATCH_TOKEN }}
+          # The github context belongs to the CALLER, so these describe the
+          # push to staging `main` that fired the stub.
+          HEAD_MSG: ${{ github.event.head_commit.message }}
+          HEAD_AUTHOR_NAME: ${{ github.event.head_commit.author.name }}
+          SHA: ${{ github.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          # Loop guard 1: skip the stlc "Build SDK" squash commit (it carries
+          # the Stainless-Generated-From trailer in its message).
+          if printf '%s' "$HEAD_MSG" | grep -q 'Stainless-Generated-From'; then
+            echo "Head commit is an stlc build — skipping reseal dispatch."
+            exit 0
+          fi
+
+          # Loop guard 2: skip bot-authored commits — stlc's own regen commits
+          # and pushes from the shared stlc-generate workflow, which commits as
+          # knock-eng-bot.
+          case "${HEAD_AUTHOR_NAME}" in
+            stlc-bot|knock-eng-bot)
+              echo "Head commit authored by ${HEAD_AUTHOR_NAME} — skipping reseal dispatch."
+              exit 0
+              ;;
+          esac
+
+          [ -n "${DISPATCH_TOKEN:-}" ] || { echo "CONFIG_DISPATCH_TOKEN not set" >&2; exit 1; }
+          payload=$(jq -n --arg sha "$SHA" --arg repo "$REPO" \
+            '{event_type:"seal-custom-code",client_payload:{target:"all",sha:$sha,repo:$repo}}')
+          code=$(curl -sS -o /tmp/dispatch.txt -w '%{http_code}' -X POST \
+            -H "Authorization: Bearer ${DISPATCH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${CONFIG_REPO}/dispatches" \
+            -d "$payload")
+          if [ "$code" = "204" ]; then
+            echo "Reseal dispatched to ${CONFIG_REPO}."
+          else
+            echo "Dispatch failed (HTTP $code)" >&2; cat /tmp/dispatch.txt >&2; exit 1
+          fi

@@ -1,0 +1,28 @@
+# Copy this file into a STAGING SDK repo as:
+#   .github/workflows/trigger-back-sync-on-release.yml
+# and seal it with `stlc build` like any custom code.
+#
+# This one RUNS on the PRODUCTION repo — it lands there via the promote, like
+# every other sealed file, and the `if:` guard keeps it inert on staging.
+#
+# Replace the hardcoded repo names (this example uses the mAPI node target):
+#   knocklabs/knock-mgmt-node          → your production repo (the `if:` guard)
+#   knocklabs/knock-mgmt-node-staging  → your staging repo
+name: Trigger staging back-sync on release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch: {}
+
+jobs:
+  notify:
+    # Self-routing guard: must name the PRODUCTION repo.
+    if: github.repository == 'knocklabs/knock-mgmt-node'
+    permissions:
+      contents: read
+    uses: knocklabs/stainless-workflows/.github/workflows/trigger-back-sync-on-release.yml@main
+    with:
+      staging_repo: knocklabs/knock-mgmt-node-staging
+    # Forwards STAGING_DISPATCH_TOKEN — the only secret on the production repo.
+    secrets: inherit

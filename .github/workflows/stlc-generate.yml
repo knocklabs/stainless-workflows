@@ -8,8 +8,8 @@ name: Generate SDKs with stlc
 # Generates SDKs for all configured targets and syncs to SDK staging repos.
 # On pull_request (in the caller): pushes to a preview branch on each staging
 # repo and sticky-comments diff links onto the PR. On push to main: pushes
-# directly to main on each staging repo (the per-language Promote workflow then
-# opens a release PR to production).
+# directly to main on each staging repo (the per-language promote workflow
+# then fast-forwards production up to staging when a maintainer dispatches it).
 #
 # Adapted from stainless/stlc examples/config-repo/.github/workflows/stlc-generate.yml.
 # Commit identity (knock-eng-bot) is centralized here so every config repo

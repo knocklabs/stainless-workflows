@@ -1,0 +1,45 @@
+# Copy this file into a STAGING SDK repo as:
+#   .github/workflows/trunk-sync-lock.yml
+# and seal it with `stlc build` like any custom code.
+#
+# Replace the hardcoded repo names (this example uses the mAPI node target):
+#   knocklabs/knock-mgmt-node-staging  → your staging repo (the `if:` guard)
+#   knocklabs/knock-mgmt-node          → your production repo
+#
+# First-run note: GitHub treats a status check as "required" only once it has
+# been reported at least once. At setup time staging and production are
+# identical, so trigger this workflow once (Run workflow button) BEFORE adding
+# `trunk-synced` to staging main's required checks — the first status is then
+# green rather than missing.
+name: Trunk sync lock
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+  # Re-evaluate the moment the back-sync completes (clears the red) …
+  workflow_run:
+    workflows: ["Sync from production"]
+    types: [completed]
+  # … and the moment a release is published (sets the red eagerly).
+  repository_dispatch:
+    types: [prod-released]
+  workflow_dispatch: {}
+  schedule:
+    - cron: '*/30 * * * *'
+
+jobs:
+  lock:
+    # Self-routing guard: must name the STAGING repo. The cron above still
+    # fires in the production repo's copy of this file; the guard skips it there.
+    if: github.repository == 'knocklabs/knock-mgmt-node-staging'
+    permissions:
+      contents: read
+      statuses: write
+      pull-requests: read
+    uses: knocklabs/stainless-workflows/.github/workflows/trunk-sync-lock.yml@main
+    with:
+      production_repo: knocklabs/knock-mgmt-node
+    # Production is public, so no secret is needed. If yours is private,
+    # provide a read token as PRODUCTION_REPO_TOKEN.
+    secrets: inherit

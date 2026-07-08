@@ -1,0 +1,44 @@
+# Copy this file into a STAGING SDK repo as:
+#   .github/workflows/stlc-sync-from-production.yml
+# and seal it with `stlc build` like any custom code.
+#
+# Replace the hardcoded repo names (this example uses the mAPI node target):
+#   knocklabs/knock-mgmt-node-staging  → your staging repo (the `if:` guard)
+#   knocklabs/knock-mgmt-node          → your production repo
+#
+# KEEP the workflow name "Sync from production" — trunk-sync-lock.yml's
+# workflow_run trigger matches on it. Pin the `@` ref to a tag once the shared
+# repo stabilizes.
+name: Sync from production
+
+on:
+  schedule:
+    # Polls for non-release production changes (e.g. a community PR merged
+    # between releases). Tighten if you take frequent community PRs.
+    - cron: '17 */6 * * *'
+  workflow_dispatch: {}
+  # The eager path: production's trigger-back-sync-on-release.yml fires this
+  # within seconds of a release being published.
+  repository_dispatch:
+    types: [prod-released]
+
+concurrency:
+  group: stlc-sync-from-production
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    # Self-routing guard: must name the STAGING repo. The cron above still
+    # fires in the production repo's copy of this file; the guard skips it there.
+    if: github.repository == 'knocklabs/knock-mgmt-node-staging'
+    # The fast-forward push to staging `main` uses this GITHUB_TOKEN. If
+    # `trunk-synced` is a required check on staging `main`, add the pushing
+    # identity to the ruleset's bypass list (see the shared repo's README).
+    permissions:
+      contents: write
+    uses: knocklabs/stainless-workflows/.github/workflows/stlc-sync-from-production.yml@main
+    with:
+      production_repo: knocklabs/knock-mgmt-node
+    # Production is public, so no secret is needed. If yours is private,
+    # provide a read token as PRODUCTION_REPO_TOKEN.
+    secrets: inherit

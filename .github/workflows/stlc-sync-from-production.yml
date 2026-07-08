@@ -1,0 +1,82 @@
+name: Sync from production
+
+# Reusable (workflow_call) implementation of the stlc back-sync: bring
+# production's commits back onto staging `main` by fast-forwarding. This keeps
+# staging and production identical and linear so the next `stlc build` reseals
+# against the released state.
+#
+# Called from each staging SDK repo's caller stub (see
+# examples/sdk-repo/stlc-sync-from-production.yml), which owns the triggers
+# (release dispatch + poll), concurrency, the self-routing repo guard, and the
+# `contents: write` permission this job uses to push staging `main`.
+#
+# Adapted from stainless/stlc examples/sdk-repo/.github/workflows/stlc-sync-from-production.yml.
+on:
+  workflow_call:
+    inputs:
+      production_repo:
+        description: 'Production repo to pull from, as owner/name (e.g. knocklabs/knock-mgmt-node).'
+        required: true
+        type: string
+    secrets:
+      PRODUCTION_REPO_TOKEN:
+        description: 'Only needed if the production repo is PRIVATE: a token that can read it. Public production repos are fetched anonymously.'
+        required: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    env:
+      PRODUCTION_REPO: ${{ inputs.production_repo }}
+      PRODUCTION_READ_TOKEN: ${{ secrets.PRODUCTION_REPO_TOKEN }}
+    steps:
+      - name: Check out staging
+        # persist-credentials stays ON (the default): the push step below
+        # pushes to `origin` (staging) with the caller's GITHUB_TOKEN, which
+        # is why the stub must grant `contents: write`.
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Fetch production main
+        run: |
+          # A public production repo is readable with no credential. If the
+          # caller forwarded PRODUCTION_REPO_TOKEN (private production), use it.
+          if [ -n "${PRODUCTION_READ_TOKEN:-}" ]; then
+            git remote add production \
+              "https://x-access-token:${PRODUCTION_READ_TOKEN}@github.com/${PRODUCTION_REPO}.git"
+          else
+            git remote add production "https://github.com/${PRODUCTION_REPO}.git"
+          fi
+          git fetch production main
+
+      - name: Check whether production has content staging lacks
+        id: diff
+        run: |
+          # Inverse of the promote guard: would merging production into
+          # staging change staging's tree? If not, staging already has
+          # production's content.
+          MERGED=$(git merge-tree --write-tree origin/main production/main) || MERGED=conflict
+          STAGING_TREE=$(git rev-parse 'origin/main^{tree}')
+          if [ "$MERGED" = "$STAGING_TREE" ]; then
+            echo "Staging already has production's content. Nothing to pull back."
+            echo "behind=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "behind=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Sync production to staging (fast-forward)
+        if: steps.diff.outputs.behind == 'true'
+        run: |
+          # Refuse unless staging/main is an ancestor of production/main. If it
+          # isn't, the trunks have forked (staging advanced out of band while a
+          # production change was unsynced) and a fast-forward is unsafe.
+          #
+          # The trunk-sync lock (trunk-sync-lock.yml) is what normally
+          # prevents this by freezing staging merges until the back-sync lands.
+          if ! git merge-base --is-ancestor origin/main production/main; then
+            echo "::error title=Back-sync blocked::staging main is not an ancestor of production/main."
+            exit 1
+          fi
+          git push origin production/main:refs/heads/main
+          echo "Fast-forwarded staging/main to production/main."
