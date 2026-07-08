@@ -21,9 +21,9 @@ Two kinds of repos consume this:
 | `.github/workflows/stlc-sync-tracking.yml` | config repos | `examples/config-repo/stlc-sync-tracking.yml` |
 | `.github/workflows/stlc-promote.yml` | staging SDK repos | `examples/sdk-repo/stlc-promote.yml` |
 | `.github/workflows/stlc-sync-from-production.yml` | staging SDK repos | `examples/sdk-repo/stlc-sync-from-production.yml` |
-| `.github/workflows/trigger-back-sync-on-release.yml` | production SDK repos | `examples/sdk-repo/trigger-back-sync-on-release.yml` |
 | `.github/workflows/trunk-sync-lock.yml` | staging SDK repos | `examples/sdk-repo/trunk-sync-lock.yml` |
 | `.github/workflows/seal-dispatch.yml` | staging SDK repos (optional) | `examples/sdk-repo/seal-dispatch.yml` |
+| `.github/workflows/trigger-back-sync-on-release.yml` | production SDK repos | `examples/sdk-repo/trigger-back-sync-on-release.yml` |
 
 ## This repo must be PUBLIC
 
@@ -93,8 +93,8 @@ In each staging SDK repo:
 | Secret | Stored in | Scope | Used by |
 | --- | --- | --- | --- |
 | `PRODUCTION_REPO_TOKEN` | staging repo | Contents: write on the production repo | `stlc-promote.yml` |
-| `STAGING_DISPATCH_TOKEN` | production repo | `repository_dispatch` to the staging repo (fine-grained PAT, Contents: write on that one repo) | `trigger-back-sync-on-release.yml` |
 | `CONFIG_DISPATCH_TOKEN` | staging repo | `repository_dispatch` to the config repo | `seal-dispatch.yml` (optional) |
+| `STAGING_DISPATCH_TOKEN` | production repo | `repository_dispatch` to the staging repo (fine-grained PAT, Contents: write on that one repo) | `trigger-back-sync-on-release.yml` |
 
 The stubs use `secrets: inherit`, so these can live as repo secrets or as org
 secrets scoped to the right repos. The back-sync and trunk-sync-lock need no
