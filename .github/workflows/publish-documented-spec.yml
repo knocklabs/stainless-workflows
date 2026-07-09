@@ -1,0 +1,146 @@
+name: Publish documented OpenAPI spec
+
+# Reusable (workflow_call) job that publishes a Stainless-generated "documented"
+# OpenAPI spec (transforms + code samples applied) to the Knock docs repo as a
+# PR. Shared across Knock's Stainless config repos (stainless-knock-mapi,
+# stainless-knock-api, ...); each keeps a thin caller job that owns the trigger
+# and passes the per-repo inputs (source repo + docs path).
+#
+# The spec is built locally from the hidden `openapi` target (`stlc build
+# --targets openapi`) — no Stainless SaaS round-trip. This replaces the old
+# per-service deploy-prod "Create PR on the docs repo" steps (control,
+# switchboard), which uploaded the raw spec to Stainless to get the documented
+# version.
+#
+# It builds only the `openapi` target (pure local codegen, no production_repo →
+# no SDK repos touched) and consumes nothing the `stlc-generate` pipeline
+# produces, so a caller can run the two in parallel and neither blocks the
+# other. The caller decides WHEN to publish (its job-level `if:`); this workflow
+# is trigger-agnostic so it works from a push-to-main caller (mapi) or a
+# release-triggered one (api).
+on:
+  workflow_call:
+    inputs:
+      source-repo:
+        description: 'Name of the upstream service repo the spec comes from (e.g. "control", "switchboard"). Drives the docs branch (<source-repo>-openapi-spec-updates), the PR title and the commit message.'
+        type: string
+        required: true
+      docs-spec-path:
+        description: 'Destination path of the spec inside the docs repo (e.g. "data/specs/mapi/openapi.yml").'
+        type: string
+        required: true
+      workspace:
+        description: 'Path to the stainless workspace (contains workspace.json). Matches the stlc-generate default.'
+        type: string
+        default: stainless
+    secrets:
+      STLC_READ_TOKEN:
+        description: 'PAT with Contents:Read on stainless/stlc* repos. Consumed by the caller repo''s ./.github/actions/setup-stlc to fetch the stlc CLI family.'
+        required: true
+      DOCS_REPO_TOKEN:
+        description: 'Token with write access to the docs repo (clone, push branch, open PR).'
+        required: true
+
+permissions:
+  # Only reads the caller repo; every docs-repo write goes through DOCS_REPO_TOKEN.
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      # Derived once so the branch/title/commit stay consistent across steps.
+      # (`control` -> control-openapi-spec-updates, `switchboard` -> switchboard-...)
+      # Bracket notation is the injection-proof form for hyphenated input names.
+      DOCS_BRANCH: ${{ inputs['source-repo'] }}-openapi-spec-updates
+      SOURCE_REPO: ${{ inputs['source-repo'] }}
+      DOCS_REPO: knocklabs/docs
+      DOCS_SPEC_PATH: ${{ inputs['docs-spec-path'] }}
+      # Full path (from repo root) of the built spec. The openapi target writes
+      # openapi.documented.json under the workspace's sdks/ output dir; the
+      # filename comes from targets.openapi.options.files in stainless.yml.
+      DOCUMENTED_SPEC: ${{ inputs.workspace }}/sdks/openapi/openapi.documented.json
+    steps:
+      - name: Checkout config repo
+        # No `repository:` → checks out the CALLER's config repo, bringing its
+        # stainless/ workspace and its own ./.github/actions/setup-stlc.
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup stlc
+        # `./` resolves against the checked-out CALLER repo.
+        uses: ./.github/actions/setup-stlc
+        with:
+          stlc-read-token: ${{ secrets.STLC_READ_TOKEN }}
+
+      - name: Build the documented OpenAPI spec
+        # The openapi target is excluded from the default `all`, so name it
+        # explicitly. No production_repo → pure local codegen (no push, no
+        # integration). Output lands at $DOCUMENTED_SPEC.
+        working-directory: ${{ inputs.workspace }}
+        run: stlc build --targets openapi --no-lint
+
+      - name: Convert documented spec to YAML for docs
+        # The openapi target emits JSON (source specs are JSON) and the docs repo
+        # stores it as YAML. yq is preinstalled on ubuntu-latest runners.
+        run: yq -o=yaml "$DOCUMENTED_SPEC" > openapi.documented.yaml
+
+      - name: Configure git
+        run: |
+          git config --global user.name "knock-eng-bot"
+          git config --global user.email "ops-development@knock.app"
+
+      - name: Clone docs
+        env:
+          DOCS_REPO_TOKEN: ${{ secrets.DOCS_REPO_TOKEN }}
+        run: |
+          git clone "https://x-access-token:${DOCS_REPO_TOKEN}@github.com/${DOCS_REPO}.git" docs
+
+      - name: Update OpenAPI spec
+        working-directory: ./docs
+        run: |
+          # Check if the branch already exists on remote
+          if git ls-remote --heads origin "$DOCS_BRANCH" | grep -q "$DOCS_BRANCH"; then
+            echo "Branch exists on remote, checking out and tracking"
+            git checkout -b "$DOCS_BRANCH" "origin/$DOCS_BRANCH"
+          else
+            echo "Branch does not exist, creating new branch"
+            git checkout -b "$DOCS_BRANCH"
+          fi
+          cp ../openapi.documented.yaml "$DOCS_SPEC_PATH"
+
+      - name: Check for pending changes
+        id: pending_changes
+        working-directory: ./docs
+        run: |
+          if [[ -n "$(git status --porcelain)" ]]; then
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Commit and push changes
+        if: steps.pending_changes.outputs.has_changes == 'true'
+        working-directory: ./docs
+        run: |
+          git add .
+          git commit -m "chore: update ${SOURCE_REPO} openapi spec to ${{ github.sha }}"
+          git push origin "$DOCS_BRANCH"
+
+      - name: Create PR on the docs repo
+        if: steps.pending_changes.outputs.has_changes == 'true'
+        working-directory: ./docs
+        env:
+          GH_TOKEN: ${{ secrets.DOCS_REPO_TOKEN }}
+        run: |
+          # Check if a PR already exists for this branch
+          if ! gh pr list --repo "$DOCS_REPO" --head "$DOCS_BRANCH" --json number --jq '.[] | .number' | grep -q .; then
+            echo "No existing PR found, creating new PR"
+            gh pr create \
+              --repo "$DOCS_REPO" \
+              --title "chore: update ${SOURCE_REPO} openapi spec" \
+              --body "Automated PR created from GitHub Actions workflow from ${{ github.repository }} (${{ github.sha }})."
+          else
+            echo "PR already exists for branch ${DOCS_BRANCH}, skipping PR creation"
+          fi

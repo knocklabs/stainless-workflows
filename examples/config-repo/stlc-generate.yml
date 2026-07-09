@@ -3,7 +3,8 @@
 #
 # It owns the triggers (which cannot be externalized to a reusable workflow)
 # and the `paths:` filters, then delegates all logic to the shared reusable
-# workflow. Pin the `@` ref to a tag once the shared repo stabilizes.
+# workflows: `generate` builds/pushes the SDKs; `publish-documented-spec` opens
+# the docs-repo PR. Pin the `@` refs to a tag once the shared repo stabilizes.
 name: Generate SDKs with stlc
 
 on:
@@ -35,3 +36,35 @@ jobs:
     # with:
     #   workspace: stainless
     #   targets: all
+
+  # Publish the documented OpenAPI spec (transforms + code samples applied) to
+  # knocklabs/docs as a PR. Runs in parallel with `generate` — it builds only the
+  # `openapi` target itself and shares nothing with SDK generation, so neither
+  # blocks the other. Only on push to main (the `push:` trigger is main-only), so
+  # a docs PR is never opened for an in-flight SDK PR.
+  #
+  # Requires an `openapi` target in stainless.yml that emits a documented spec:
+  #   targets:
+  #     openapi:
+  #       options:
+  #         files:
+  #           openapi.documented.json: { with: [transforms, code-samples] }
+  publish-documented-spec:
+    if: github.event_name == 'push'
+    permissions:
+      # Only reads this repo; all docs-repo writes use DOCS_REPO_TOKEN.
+      contents: read
+    uses: knocklabs/stainless-workflows/.github/workflows/publish-documented-spec.yml@main
+    # Forwards STLC_READ_TOKEN and DOCS_REPO_TOKEN from this repo's secrets.
+    secrets: inherit
+    with:
+      # Per-repo: `source-repo` is the upstream service repo the spec comes from;
+      # it drives the docs branch (<source-repo>-openapi-spec-updates), PR title
+      # and commit. `docs-spec-path` is the destination in the docs repo.
+      #   mapi config repo -> source-repo: control,     docs-spec-path: data/specs/mapi/openapi.yml
+      #   api  config repo -> source-repo: switchboard, docs-spec-path: data/specs/api/openapi.yml
+      source-repo: CHANGE_ME
+      docs-spec-path: data/specs/CHANGE_ME/openapi.yml
+      # Optional — omit to accept the default:
+      # with:
+      #   workspace: stainless
