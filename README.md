@@ -18,6 +18,7 @@ Two kinds of repos consume this:
 | Reusable workflow | Called from | Stub to copy |
 | --- | --- | --- |
 | `.github/workflows/stlc-generate.yml` | config repos | `examples/config-repo/stlc-generate.yml` |
+| `.github/workflows/publish-documented-spec.yml` | config repos (job in the `stlc-generate` stub) | `examples/config-repo/stlc-generate.yml` |
 | `.github/workflows/stlc-sync-tracking.yml` | config repos | `examples/config-repo/stlc-sync-tracking.yml` |
 | `.github/workflows/stlc-promote.yml` | staging SDK repos | `examples/sdk-repo/stlc-promote.yml` |
 | `.github/workflows/stlc-sync-from-production.yml` | staging SDK repos | `examples/sdk-repo/stlc-sync-from-production.yml` |
