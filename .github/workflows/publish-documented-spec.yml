@@ -79,7 +79,7 @@ jobs:
         # explicitly. No production_repo → pure local codegen (no push, no
         # integration). Output lands at $DOCUMENTED_SPEC.
         working-directory: ${{ inputs.workspace }}
-        run: stlc build --targets openapi --no-lint
+        run: stlc build --targets openapi
 
       - name: Convert documented spec to YAML for docs
         # The openapi target emits JSON (source specs are JSON) and the docs repo
