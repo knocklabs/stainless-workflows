@@ -32,6 +32,14 @@ on:
       SDK_WRITE_TOKEN:
         description: 'Token with write access to the SDK staging/production repos.'
         required: true
+      KNOCK_ENG_BOT_GITHUB_TOKEN:
+        description: >-
+          Bot token with Contents:write + PullRequests:write on the CALLING config repo, used to
+          open the seal-back PR. Must not be GITHUB_TOKEN: GitHub parks any workflow run triggered
+          by github-actions[bot] in `action_required`, so a seal PR opened with GITHUB_TOKEN never
+          runs its own required checks and can never auto-merge. Optional — falls back to
+          GITHUB_TOKEN, which still opens the PR but leaves it awaiting a manual "Approve and run".
+        required: false
 
 concurrency:
   # `github.workflow` resolves to the CALLER's workflow, and concurrency is
@@ -235,11 +243,18 @@ jobs:
         # On push to main, `stlc build` re-seals custom code and rewrites the
         # tracking files under <workspace>/custom-code/. `main` is protected, so
         # open a PR with them rather than committing directly. Merging it won't
-        # loop — the `guard` job skips tracking-files-only pushes. Pushes with
-        # the per-repo GITHUB_TOKEN (config repo), not SDK_WRITE_TOKEN.
+        # loop — the `guard` job skips tracking-files-only pushes.
+        #
+        # Deliberately NOT GITHUB_TOKEN, even though this only touches the config
+        # repo: GitHub parks any run triggered by github-actions[bot] in
+        # `action_required`, so a PR opened with GITHUB_TOKEN can never run its own
+        # required checks and can never auto-merge — a human has to click "Approve
+        # and run" on every seal PR. Opening it as the bot user makes the
+        # pull_request run execute on the first attempt. Not SDK_WRITE_TOKEN either:
+        # that one is scoped to the SDK repos, and this writes to the config repo.
         if: ${{ success() && github.event_name == 'push' }}
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.KNOCK_ENG_BOT_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           STAINLESS_WORKSPACE: ${{ inputs.workspace }}
         run: |

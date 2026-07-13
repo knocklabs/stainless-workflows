@@ -29,6 +29,14 @@ on:
       SDK_WRITE_TOKEN:
         description: 'Token with write access to the SDK staging/production repos.'
         required: true
+      KNOCK_ENG_BOT_GITHUB_TOKEN:
+        description: >-
+          Bot token with Contents:write + PullRequests:write on the CALLING config repo, used to
+          open the seal-back PR. Must not be GITHUB_TOKEN: GitHub parks any workflow run triggered
+          by github-actions[bot] in `action_required`, so a seal PR opened with GITHUB_TOKEN never
+          runs its own required checks and can never auto-merge. Optional — falls back to
+          GITHUB_TOKEN, which still opens the PR but leaves it awaiting a manual "Approve and run".
+        required: false
 
 permissions:
   contents: write       # open the seal-back PR on the calling config repo
@@ -86,10 +94,15 @@ jobs:
         # Same seal-back step as stlc-generate.yml: `main` is protected, so open
         # a PR with the updated tracking files (shared `stlc/seal-tracking`
         # branch, so there's a single seal-back PR regardless of which workflow
-        # opened it). Pushes with the config GITHUB_TOKEN.
+        # opened it).
+        #
+        # Deliberately NOT GITHUB_TOKEN — see the matching step in stlc-generate.yml.
+        # GitHub parks any run triggered by github-actions[bot] in `action_required`,
+        # so a PR opened with GITHUB_TOKEN can never run its own required checks and
+        # can never auto-merge.
         if: success()
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.KNOCK_ENG_BOT_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           STAINLESS_WORKSPACE: ${{ inputs.workspace }}
         run: |
