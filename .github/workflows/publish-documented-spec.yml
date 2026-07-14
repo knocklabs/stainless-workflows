@@ -16,8 +16,7 @@ name: Publish documented OpenAPI spec
 # no SDK repos touched) and consumes nothing the `stlc-generate` pipeline
 # produces, so a caller can run the two in parallel and neither blocks the
 # other. The caller decides WHEN to publish (its job-level `if:`); this workflow
-# is trigger-agnostic so it works from a push-to-main caller (mapi) or a
-# release-triggered one (api).
+# is trigger-agnostic.
 on:
   workflow_call:
     inputs:
