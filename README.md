@@ -96,11 +96,14 @@ In each staging SDK repo:
 | `PRODUCTION_REPO_TOKEN` | staging repo | Contents: write on the production repo | `stlc-promote.yml` |
 | `CONFIG_DISPATCH_TOKEN` | staging repo | `repository_dispatch` to the config repo | `seal-dispatch.yml` (optional) |
 | `STAGING_DISPATCH_TOKEN` | production repo | `repository_dispatch` to the staging repo (fine-grained PAT, Contents: write on that one repo) | `trigger-back-sync-on-release.yml` |
+| `SDK_WRITE_TOKEN` | staging repo (same token the config repo uses) | Contents: write on the staging repo; owner must bypass staging `main`'s PR rule | `stlc-sync-from-production.yml` |
 
 The stubs use `secrets: inherit`, so these can live as repo secrets or as org
-secrets scoped to the right repos. The back-sync and trunk-sync-lock need no
-secret: they read public production anonymously and push staging with the
-built-in `GITHUB_TOKEN`.
+secrets scoped to the right repos. `SDK_WRITE_TOKEN` in particular should be an
+org secret scoped to the config repo + staging repos, so a rotation lands
+everywhere at once. Trunk-sync-lock needs no secret; the back-sync reads public
+production anonymously and pushes staging `main` as `SDK_WRITE_TOKEN`'s owner —
+the same identity codegen pushes with, so the two rise and fall together.
 
 ### One-time setup per target
 
@@ -111,12 +114,13 @@ built-in `GITHUB_TOKEN`.
 2. **Seed then require `trunk-synced`**: run `trunk-sync-lock.yml` once
    manually (the trunks are in sync at setup, so the first status is green),
    then make `trunk-synced` a required status check on staging `main`.
-3. **Bypass actors on staging `main`**: a required status check blocks direct
-   pushes too, so add the identities that push staging `main` directly to the
-   ruleset's bypass list — the back-sync's pusher (`github-actions` for these
-   stubs) and the codegen identity behind `SDK_WRITE_TOKEN` (knock-eng-bot).
-   Codegen additionally holds itself during the release window via the
-   guard step in `stlc-generate.yml`.
+3. **Bypass actors on staging `main`**: rules that block direct pushes
+   (required status checks, required pull requests) must exempt the one
+   identity that pushes staging `main` directly — the owner of
+   `SDK_WRITE_TOKEN`, used by both codegen and the back-sync. Add that
+   identity to the ruleset's bypass list (a user needs a team or role entry;
+   an app is added directly). Codegen additionally holds itself during the
+   release window via the guard step in `stlc-generate.yml`.
 4. **Optional promote approval**: add required reviewers to the staging
    repo's `production` environment to gate each promote dispatch.
 
