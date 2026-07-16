@@ -22,6 +22,9 @@ on:
       PRODUCTION_REPO_TOKEN:
         description: 'Only needed if the production repo is PRIVATE: a token that can read it. Public production repos are fetched anonymously.'
         required: false
+      SDK_WRITE_TOKEN:
+        description: 'Token used to push staging `main` — the same identity codegen (stlc-generate.yml) pushes with, whose owner bypasses the pull-request rule on staging `main`. Falls back to the caller''s GITHUB_TOKEN when unset (which only works if no ruleset requires PRs).'
+        required: false
 
 jobs:
   sync:
@@ -32,11 +35,15 @@ jobs:
     steps:
       - name: Check out staging
         # persist-credentials stays ON (the default): the push step below
-        # pushes to `origin` (staging) with the caller's GITHUB_TOKEN, which
-        # is why the stub must grant `contents: write`.
+        # pushes to `origin` (staging) with this checkout token. Prefer
+        # SDK_WRITE_TOKEN — its owner bypasses staging main's PR-required
+        # ruleset (same identity as codegen's direct pushes). The GITHUB_TOKEN
+        # fallback is why the stub grants `contents: write`, but it can't
+        # push through a PR-required rule.
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          token: ${{ secrets.SDK_WRITE_TOKEN || github.token }}
 
       - name: Fetch production main
         run: |
