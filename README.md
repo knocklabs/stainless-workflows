@@ -52,8 +52,29 @@ In a config repo:
 
 1. Copy the two files from `examples/config-repo/` into `.github/workflows/`.
 2. Keep your own `.github/actions/setup-stlc/action.yml`.
-3. Make sure these repo secrets exist: `STLC_READ_TOKEN`, `SDK_WRITE_TOKEN`
-   (`GITHUB_TOKEN` is automatic). The stubs forward them with `secrets: inherit`.
+3. Make sure these repo secrets exist: `STLC_READ_TOKEN`, `SDK_WRITE_TOKEN`,
+   and `SEAL_PR_TOKEN` (`GITHUB_TOKEN` is automatic). The stubs forward them
+   with `secrets: inherit`.
+
+### Config-repo secrets
+
+| Secret | Scope | Used by |
+| --- | --- | --- |
+| `STLC_READ_TOKEN` | Contents: read on `stainless/stlc*` repos | `setup-stlc` (fetch the stlc CLI) |
+| `SDK_WRITE_TOKEN` | Contents: write on the SDK staging/production repos | codegen + tracking sync push to staging |
+| `SEAL_PR_TOKEN` | Contents: write **+ Pull requests: write** on this config repo | opening and auto-merging the `stlc/seal-tracking` PR |
+
+`SEAL_PR_TOKEN` must be a **PAT (or GitHub App token), not `GITHUB_TOKEN`**, and
+its owner must be an org member with write on the config repo. This is what lets
+the seal-back PR merge without a human: a head branch pushed by `GITHUB_TOKEN`
+leaves the required `generate` check parked in `action_required` (GitHub's
+"approve and run" gate), so auto-merge never fires and the PR sits blocked until
+someone clicks approve. A real-identity PAT lets the check run on its own, so
+auto-merge lands the PR on green and holds it on red. A minimal fine-grained PAT
+scoped to just this repo (Contents: write, Pull requests: write) is enough; the
+`knock-eng-bot` identity is the natural owner. If `SEAL_PR_TOKEN` is unset the
+workflows fall back to `GITHUB_TOKEN`, so nothing breaks — the seal-back PR just
+still needs a manual approval to run its check.
 
 No inputs are required. The config filename is read from the workspace's
 `workspace.json` (`stainless_config`), and `workspace` / `targets` default to

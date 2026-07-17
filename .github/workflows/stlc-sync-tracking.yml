@@ -29,6 +29,18 @@ on:
       SDK_WRITE_TOKEN:
         description: 'Token with write access to the SDK staging/production repos.'
         required: true
+      SEAL_PR_TOKEN:
+        description: >-
+          PAT (Contents:write + Pull requests:write on the calling config repo)
+          used to open and auto-merge the seal-back PR. Deliberately NOT
+          GITHUB_TOKEN: a head branch pushed by GITHUB_TOKEN leaves the required
+          `generate` check parked in `action_required` (manual "approve and
+          run"), so auto-merge never fires and the PR sits blocked. Its owner
+          must be an org member with write on the config repo, so its PRs aren't
+          approval-gated as an outside/first-time contributor. Optional — falls
+          back to GITHUB_TOKEN (approval-gated) when unset, so a repo that hasn't
+          set it keeps working, just still needs a human to approve the check.
+        required: false
 
 permissions:
   contents: write       # open the seal-back PR on the calling config repo
@@ -100,10 +112,19 @@ jobs:
         # Same seal-back step as stlc-generate.yml: `main` is protected, so open
         # a PR with the updated tracking files (shared `stlc/seal-tracking`
         # branch, so there's a single seal-back PR regardless of which workflow
-        # opened it). Pushes with the config GITHUB_TOKEN.
+        # opened it).
+        #
+        # Pushes / opens / auto-merges as SEAL_PR_TOKEN (a PAT), not
+        # GITHUB_TOKEN. A head branch pushed by GITHUB_TOKEN leaves the required
+        # `generate` check parked in `action_required` (manual "approve and
+        # run"), so auto-merge can never fire — the whole reason these seal-back
+        # PRs used to need a human click. A real-identity PAT lets the check run
+        # on its own, so auto-merge lands the PR on green and holds it on red.
+        # Falls back to GITHUB_TOKEN when the secret is unset: that preserves the
+        # old approval-gated behavior instead of breaking a repo mid-rollout.
         if: success()
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.SEAL_PR_TOKEN || secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           STAINLESS_WORKSPACE: ${{ inputs.workspace }}
         run: |
