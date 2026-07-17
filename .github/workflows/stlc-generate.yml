@@ -137,42 +137,18 @@ jobs:
 
       - name: Hold codegen while production is ahead (release not back-synced)
         # Codegen pushes DIRECTLY to staging `main` below, so the `trunk-synced`
-        # PR gate (which covers human custom-code PRs) doesn't apply to it. This
-        # is the codegen-side guard: for each two-repo target, refuse to build if
-        # production `main` is ahead of the staging trunk — i.e. a release hasn't
-        # been back-synced yet. Otherwise codegen would advance staging
-        # independently and fork the trunks. The step re-runs cleanly once the
-        # back-sync catches up. Only runs on push to main; previews are exempt
-        # (they go to ephemeral preview branches, not the trunk).
-        # `jq`/`yq` are preinstalled on ubuntu-latest runners.
+        # PR gate (which covers human custom-code PRs) doesn't apply to it. The
+        # shared guard refuses to build while production `main` is ahead of the
+        # staging trunk — otherwise codegen would advance staging independently
+        # and fork the trunks. Re-runs cleanly once the back-sync catches up.
+        # Only runs on push to main; previews are exempt (they go to ephemeral
+        # preview branches, not the trunk). Same @-ref caveat as the reusable
+        # workflows: pin to a tag once the shared repo stabilizes.
         if: github.event_name == 'push'
-        working-directory: ${{ inputs.workspace }}
-        env:
-          GH_TOKEN: ${{ secrets.SDK_WRITE_TOKEN }}
-        run: |
-          set -euo pipefail
-          # The stainless config filename is repo-declared in workspace.json.
-          config_file=$(jq -r '.stainless_config' workspace.json)
-          held=""
-          while IFS=$'\t' read -r target staging prod; do
-            # Skip one-repo targets (staging == production) and targets with no production repo.
-            { [ -z "$prod" ] || [ "$prod" = "null" ] || [ "$staging" = "$prod" ]; } && continue
-            d=$(mktemp -d); git -C "$d" init -q
-            git -C "$d" remote add staging "https://x-access-token:${GH_TOKEN}@github.com/${staging}.git"
-            git -C "$d" remote add prod "https://x-access-token:${GH_TOKEN}@github.com/${prod}.git"
-            git -C "$d" fetch -q staging main || { rm -rf "$d"; continue; }
-            # No production main yet (first release not cut) → nothing to be ahead of.
-            git -C "$d" fetch -q prod main || { rm -rf "$d"; continue; }
-            if ! git -C "$d" merge-base --is-ancestor prod/main staging/main; then
-              held="$held $target"
-            fi
-            rm -rf "$d"
-          done < <(yq -r '.targets | to_entries[] | [.key, (.value.staging_repo // .value.production_repo), (.value.production_repo // .value.staging_repo)] | @tsv' "$config_file")
-          if [ -n "$held" ]; then
-            echo "::error title=Codegen held::production is ahead of the staging trunk (a release isn't back-synced yet) for:$held. Wait for the back-sync, then re-run."
-            exit 1
-          fi
-          echo "All targets are in sync with production — proceeding to build."
+        uses: knocklabs/stainless-workflows/.github/actions/trunk-sync-guard@main
+        with:
+          workspace: ${{ inputs.workspace }}
+          sdk-write-token: ${{ secrets.SDK_WRITE_TOKEN }}
 
       - name: Generate SDKs and push
         env:

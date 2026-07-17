@@ -1,0 +1,52 @@
+name: Trunk-sync guard
+description: >-
+  Hold the calling job while production `main` is ahead of the staging trunk —
+  i.e. a release hasn't been back-synced yet. For each two-repo target in the
+  stainless config, fails if production `main` is not an ancestor of staging
+  `main`: an `stlc build --push` to the trunk in that state would advance
+  staging independently and fork the trunks. Fails the job with an
+  actionable error; re-runs cleanly once the back-sync catches up. Must run
+  before ANY step that pushes staging `main` (stlc-generate.yml,
+  stlc-sync-tracking.yml).
+
+inputs:
+  workspace:
+    description: 'Path to the stainless workspace (contains workspace.json, which names the stainless config).'
+    required: true
+  sdk-write-token:
+    description: 'Token that can read the SDK staging and production repos (SDK_WRITE_TOKEN).'
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Check staging trunks against production
+      shell: bash
+      working-directory: ${{ inputs.workspace }}
+      env:
+        GH_TOKEN: ${{ inputs.sdk-write-token }}
+      # `jq`/`yq` are preinstalled on ubuntu-latest runners.
+      run: |
+        set -euo pipefail
+        # The stainless config filename is repo-declared in workspace.json.
+        config_file=$(jq -r '.stainless_config' workspace.json)
+        held=""
+        while IFS=$'\t' read -r target staging prod; do
+          # Skip one-repo targets (staging == production) and targets with no production repo.
+          { [ -z "$prod" ] || [ "$prod" = "null" ] || [ "$staging" = "$prod" ]; } && continue
+          d=$(mktemp -d); git -C "$d" init -q
+          git -C "$d" remote add staging "https://x-access-token:${GH_TOKEN}@github.com/${staging}.git"
+          git -C "$d" remote add prod "https://x-access-token:${GH_TOKEN}@github.com/${prod}.git"
+          git -C "$d" fetch -q staging main || { rm -rf "$d"; continue; }
+          # No production main yet (first release not cut) → nothing to be ahead of.
+          git -C "$d" fetch -q prod main || { rm -rf "$d"; continue; }
+          if ! git -C "$d" merge-base --is-ancestor prod/main staging/main; then
+            held="$held $target"
+          fi
+          rm -rf "$d"
+        done < <(yq -r '.targets | to_entries[] | [.key, (.value.staging_repo // .value.production_repo), (.value.production_repo // .value.staging_repo)] | @tsv' "$config_file")
+        if [ -n "$held" ]; then
+          echo "::error title=Build held::production is ahead of the staging trunk (a release isn't back-synced yet) for:$held. Wait for the back-sync, then re-run."
+          exit 1
+        fi
+        echo "All targets are in sync with production — proceeding."
