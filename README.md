@@ -119,8 +119,11 @@ the same identity codegen pushes with, so the two rise and fall together.
    identity that pushes staging `main` directly — the owner of
    `SDK_WRITE_TOKEN`, used by both codegen and the back-sync. Add that
    identity to the ruleset's bypass list (a user needs a team or role entry;
-   an app is added directly). Codegen additionally holds itself during the
-   release window via the guard step in `stlc-generate.yml`.
+   an app is added directly). Every workflow that pushes staging `main`
+   additionally holds itself during the release window via the shared
+   `trunk-sync-guard` action (used by `stlc-generate.yml` and
+   `stlc-sync-tracking.yml`) — bypass actors are exempt from ruleset rules,
+   so this in-workflow hold is the only gate that applies to them.
 4. **Optional promote approval**: add required reviewers to the staging
    repo's `production` environment to gate each promote dispatch.
 

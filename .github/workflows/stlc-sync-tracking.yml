@@ -65,6 +65,20 @@ jobs:
           git config --global user.email "ops-development@knock.app"
           gh auth setup-git
 
+      - name: Hold sync while production is ahead (release not back-synced)
+        # This sync pushes staging `main` directly (`stlc build --push` below),
+        # so it needs the same release-window hold as codegen: while a release
+        # sits on production un-back-synced, building from the config repo
+        # would advance staging independently and fork the trunks — the
+        # 2026-07-16 mgmt fork was this workflow's scheduled run pushing during
+        # a stuck back-sync window. Holding is safe: the next scheduled tick
+        # re-runs cleanly once the back-sync lands. Same @-ref caveat as the
+        # reusable workflows: pin to a tag once the shared repo stabilizes.
+        uses: knocklabs/stainless-workflows/.github/actions/trunk-sync-guard@main
+        with:
+          workspace: ${{ inputs.workspace }}
+          sdk-write-token: ${{ secrets.SDK_WRITE_TOKEN }}
+
       - name: Absorb staging changes and re-seal
         # `stlc build` fetches each staging repo and advances the tracking files
         # past any out-of-band commits on staging `main`, then re-seals. With no
