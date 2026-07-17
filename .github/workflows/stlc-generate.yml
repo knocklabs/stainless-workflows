@@ -32,6 +32,18 @@ on:
       SDK_WRITE_TOKEN:
         description: 'Token with write access to the SDK staging/production repos.'
         required: true
+      SEAL_PR_TOKEN:
+        description: >-
+          PAT (Contents:write + Pull requests:write on the calling config repo)
+          used to open and auto-merge the seal-back PR. Deliberately NOT
+          GITHUB_TOKEN: a head branch pushed by GITHUB_TOKEN leaves the required
+          `generate` check parked in `action_required` (manual "approve and
+          run"), so auto-merge never fires and the PR sits blocked. Its owner
+          must be an org member with write on the config repo, so its PRs aren't
+          approval-gated as an outside/first-time contributor. Optional — falls
+          back to GITHUB_TOKEN (approval-gated) when unset, so a repo that hasn't
+          set it keeps working, just still needs a human to approve the check.
+        required: false
 
 concurrency:
   # `github.workflow` resolves to the CALLER's workflow, and concurrency is
@@ -211,11 +223,19 @@ jobs:
         # On push to main, `stlc build` re-seals custom code and rewrites the
         # tracking files under <workspace>/custom-code/. `main` is protected, so
         # open a PR with them rather than committing directly. Merging it won't
-        # loop — the `guard` job skips tracking-files-only pushes. Pushes with
-        # the per-repo GITHUB_TOKEN (config repo), not SDK_WRITE_TOKEN.
+        # loop — the `guard` job skips tracking-files-only pushes.
+        #
+        # Pushes / opens / auto-merges as SEAL_PR_TOKEN (a config-repo PAT), not
+        # GITHUB_TOKEN and not SDK_WRITE_TOKEN. A head branch pushed by
+        # GITHUB_TOKEN leaves the required `generate` check parked in
+        # `action_required` (manual "approve and run"), so auto-merge can never
+        # fire. A real-identity PAT lets the check run on its own, so auto-merge
+        # lands the PR on green and holds it on red. Falls back to GITHUB_TOKEN
+        # when unset: preserves the old approval-gated behavior rather than
+        # breaking a repo mid-rollout.
         if: ${{ success() && github.event_name == 'push' }}
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.SEAL_PR_TOKEN || secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           STAINLESS_WORKSPACE: ${{ inputs.workspace }}
         run: |

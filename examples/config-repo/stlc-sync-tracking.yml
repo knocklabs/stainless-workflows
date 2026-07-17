@@ -23,6 +23,10 @@ jobs:
       contents: write
       pull-requests: write
     uses: knocklabs/stainless-workflows/.github/workflows/stlc-sync-tracking.yml@main
+    # Forwards STLC_READ_TOKEN, SDK_WRITE_TOKEN, and SEAL_PR_TOKEN from this
+    # repo's secrets. SEAL_PR_TOKEN (a PAT) is what lets the seal-back PR
+    # auto-merge without a manual "approve and run" — see the shared repo's
+    # README "Config-repo secrets". Falls back to GITHUB_TOKEN when unset.
     secrets: inherit
     # Optional — omit to accept the defaults shown:
     # with:
