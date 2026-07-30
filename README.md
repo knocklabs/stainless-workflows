@@ -53,8 +53,8 @@ In a config repo:
 1. Copy the two files from `examples/config-repo/` into `.github/workflows/`.
 2. Keep your own `.github/actions/setup-stlc/action.yml`.
 3. Make sure these repo secrets exist: `STLC_READ_TOKEN`, `SDK_WRITE_TOKEN`,
-   and `SEAL_PR_TOKEN` (`GITHUB_TOKEN` is automatic). The stubs forward them
-   with `secrets: inherit`.
+   and `SEAL_PR_TOKEN` (`GITHUB_TOKEN` is automatic), plus `DOCS_REPO_TOKEN` to
+   publish its documented spec. The stubs forward them with `secrets: inherit`.
 
 ### Config-repo secrets
 
@@ -63,6 +63,7 @@ In a config repo:
 | `STLC_READ_TOKEN` | Contents: read on `stainless/stlc*` repos | `setup-stlc` (fetch the stlc CLI) |
 | `SDK_WRITE_TOKEN` | Contents: write on the SDK staging/production repos | codegen + tracking sync push to staging |
 | `SEAL_PR_TOKEN` | Contents: write **+ Pull requests: write** on this config repo | opening and auto-merging the `stlc/seal-tracking` PR |
+| `DOCS_REPO_TOKEN` | Contents: write **+ Pull requests: write** on `knocklabs/docs` | opening and auto-merging the documented-spec PR (only repos that run `publish-documented-spec`) |
 
 `SEAL_PR_TOKEN` must be a **PAT (or GitHub App token), not `GITHUB_TOKEN`**, and
 its owner must be an org member with write on the config repo. This is what lets

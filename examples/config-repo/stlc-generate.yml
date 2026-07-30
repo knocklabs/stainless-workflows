@@ -41,10 +41,12 @@ jobs:
     #   targets: all
 
   # Publish the documented OpenAPI spec (transforms + code samples applied) to
-  # knocklabs/docs as a PR. Runs in parallel with `generate` — it builds only the
-  # `openapi` target itself and shares nothing with SDK generation, so neither
-  # blocks the other. Only on push to main (the `push:` trigger is main-only), so
-  # a docs PR is never opened for an in-flight SDK PR.
+  # knocklabs/docs as an auto-merging PR (it lands once the docs repo's checks
+  # pass; DOCS_REPO_TOKEN needs Pull requests: write for that, otherwise the run
+  # warns and leaves the PR open). Runs in parallel with `generate` — it builds
+  # only the `openapi` target itself and shares nothing with SDK generation, so
+  # neither blocks the other. Only on push to main (the `push:` trigger is
+  # main-only), so a docs PR is never opened for an in-flight SDK PR.
   #
   # Requires an `openapi` target in stainless.yml that emits a documented spec:
   #   targets:
