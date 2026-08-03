@@ -1,8 +1,9 @@
 name: Publish documented OpenAPI spec
 
 # Reusable (workflow_call) job that publishes a Stainless-generated "documented"
-# OpenAPI spec (transforms + code samples applied) to the Knock docs repo as a
-# PR. Shared across Knock's Stainless config repos (stainless-knock-mapi,
+# OpenAPI spec (transforms + code samples applied) to the Knock docs repo as an
+# auto-merging PR (lands on green, holds on red — see the last step). Shared
+# across Knock's Stainless config repos (stainless-knock-mapi,
 # stainless-knock-api, ...); each keeps a thin caller job that owns the trigger
 # and passes the per-repo inputs (source repo + docs path).
 #
@@ -37,7 +38,7 @@ on:
         description: 'PAT with Contents:Read on stainless/stlc* repos. Consumed by the caller repo''s ./.github/actions/setup-stlc to fetch the stlc CLI family.'
         required: true
       DOCS_REPO_TOKEN:
-        description: 'Token with write access to the docs repo (clone, push branch, open PR).'
+        description: 'Token with write access to the docs repo (clone, push branch, open PR, enable auto-merge).'
         required: true
 
 permissions:
@@ -142,4 +143,9 @@ jobs:
               --body "Automated PR created from GitHub Actions workflow from ${{ github.repository }} (${{ github.sha }})."
           else
             echo "PR already exists for branch ${DOCS_BRANCH}, skipping PR creation"
+          fi
+          # Auto-merge so the published spec lands on the docs repo's default
+          # branch on green without anyone in the loop, and holds on red.
+          if ! gh pr merge --repo "$DOCS_REPO" --auto --squash "$DOCS_BRANCH" 2>/dev/null; then
+            echo "::warning::Could not enable auto-merge for ${DOCS_BRANCH} on ${DOCS_REPO} — merge the docs PR manually."
           fi
