@@ -38,7 +38,7 @@ on:
         description: 'PAT with Contents:Read on stainless/stlc* repos. Consumed by the caller repo''s ./.github/actions/setup-stlc to fetch the stlc CLI family.'
         required: true
       DOCS_REPO_TOKEN:
-        description: 'Token with write access to the docs repo (clone, push branch, open PR, enable auto-merge). Needs Contents:Write and Pull requests:Write; the auto-merge step is skipped with a warning if it lacks the latter.'
+        description: 'Token with write access to the docs repo (clone, push branch, open PR, enable auto-merge).'
         required: true
 
 permissions:
