@@ -18,6 +18,10 @@ name: Publish documented OpenAPI spec
 # produces, so a caller can run the two in parallel and neither blocks the
 # other. The caller decides WHEN to publish (its job-level `if:`); this workflow
 # is trigger-agnostic.
+#
+# Optionally (`docs-config-path`) the Stainless config is published alongside
+# the spec, in the same PR, so the docs can see how endpoints map to SDK
+# methods and which ones are deliberately unexposed.
 on:
   workflow_call:
     inputs:
@@ -33,6 +37,14 @@ on:
         description: 'Path to the stainless workspace (contains workspace.json). Matches the stlc-generate default.'
         type: string
         default: stainless
+      docs-config-path:
+        description: >-
+          Optional destination path of the Stainless config inside the docs
+          repo (e.g. "data/specs/api/stainless.yml"), committed in the same PR
+          as the spec. The config filename is read from the workspace's
+          workspace.json. Empty (default) publishes the spec only.
+        type: string
+        default: ''
     secrets:
       STLC_READ_TOKEN:
         description: 'PAT with Contents:Read on stainless/stlc* repos. Consumed by the caller repo''s ./.github/actions/setup-stlc to fetch the stlc CLI family.'
@@ -60,6 +72,8 @@ jobs:
       # openapi.documented.json under the workspace's sdks/ output dir; the
       # filename comes from targets.openapi.options.files in stainless.yml.
       DOCUMENTED_SPEC: ${{ inputs.workspace }}/sdks/openapi/openapi.documented.json
+      WORKSPACE: ${{ inputs.workspace }}
+      DOCS_CONFIG_PATH: ${{ inputs['docs-config-path'] }}
     steps:
       - name: Checkout config repo
         # No `repository:` → checks out the CALLER's config repo, bringing its
@@ -97,7 +111,7 @@ jobs:
         run: |
           git clone "https://x-access-token:${DOCS_REPO_TOKEN}@github.com/${DOCS_REPO}.git" docs
 
-      - name: Update OpenAPI spec
+      - name: Update OpenAPI spec (and Stainless config, if requested)
         working-directory: ./docs
         run: |
           # Check if the branch already exists on remote
@@ -109,6 +123,11 @@ jobs:
             git checkout -b "$DOCS_BRANCH"
           fi
           cp ../openapi.documented.yaml "$DOCS_SPEC_PATH"
+          if [ -n "$DOCS_CONFIG_PATH" ]; then
+            cfg=$(jq -r .stainless_config "../$WORKSPACE/workspace.json")
+            mkdir -p "$(dirname "$DOCS_CONFIG_PATH")"
+            cp "../$WORKSPACE/$cfg" "$DOCS_CONFIG_PATH"
+          fi
 
       - name: Check for pending changes
         id: pending_changes

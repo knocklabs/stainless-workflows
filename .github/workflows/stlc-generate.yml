@@ -25,6 +25,24 @@ on:
         description: '`all` builds every configured target, or a comma-separated subset (e.g. "typescript,python,go").'
         type: string
         default: all
+      fail-on-unconfigured-endpoints:
+        description: >-
+          Endpoint coverage gate. Fail the build when the spec has endpoints
+          that are in neither `resources` nor `unspecified_endpoints`
+          (`Endpoint/NotConfigured`), or when any error-level diagnostic is
+          reported. On a pull request, also posts a triage comment with the
+          pruned `stlc autoconfig` diff. Off by default; see the README,
+          "Endpoint coverage gate", before enabling.
+        type: boolean
+        default: false
+      coverage-review-team:
+        description: >-
+          Team slug in the caller's org (e.g. "product") to request a review
+          from when the coverage gate fails on a pull request. Needs
+          SEAL_PR_TOKEN (GITHUB_TOKEN cannot request team reviews). Empty
+          disables the request.
+        type: string
+        default: ''
     secrets:
       STLC_READ_TOKEN:
         description: 'PAT with Contents:Read on stainless/stlc* repos. Consumed by the caller repo''s ./.github/actions/setup-stlc to fetch the stlc CLI family.'
@@ -264,3 +282,125 @@ jobs:
           if ! gh pr merge --auto --squash "$branch" 2>/dev/null; then
             echo "::warning::Could not enable auto-merge for $branch. Merge it promptly: stale custom-code tracking files can cause a later build to drop custom code."
           fi
+
+      # ---- Endpoint coverage gate (opt-in: fail-on-unconfigured-endpoints) ----
+      #
+      # Stainless only generates code for endpoints under `resources`, and
+      # `stlc build` exits 0 when the spec has endpoints the config says
+      # nothing about, so with auto-merging spec PRs a new endpoint silently
+      # never reaches the SDKs. This reads the manifest the build just wrote
+      # and fails the job on:
+      #   - Endpoint/NotConfigured: in the spec, in neither `resources` nor
+      #     `unspecified_endpoints`. Someone has to decide whether to expose it.
+      #     (Endpoint/IsIgnored is the acknowledged state and passes.)
+      #   - any error-level diagnostic (e.g. an endpoint listed in both places).
+      #
+      # For triage it also prints the config diff `stlc autoconfig` proposes.
+      # autoconfig ignores `unspecified_endpoints` (upstream bug in 0.3.x), so
+      # it runs against a spec copy with those operations removed; the diff
+      # then covers only the genuinely unconfigured endpoints (plus model
+      # suggestions). The config is restored afterwards; nothing is committed.
+      #
+      # Deliberately last: on push the SDKs are already on staging, so the
+      # seal-back above must still run; failing here only turns the run red.
+      # On a pull request it fails the required check, which holds auto-merge
+      # until the config decision is committed to the PR branch.
+      - name: Check endpoint coverage
+        id: coverage
+        if: ${{ success() && inputs.fail-on-unconfigured-endpoints }}
+        working-directory: ${{ inputs.workspace }}
+        env:
+          WORKSPACE: ${{ inputs.workspace }}
+        run: |
+          spec=$(jq -r .openapi_spec workspace.json)
+          cfg=$(jq -r .stainless_config workspace.json)
+
+          stlc diagnostics --format=json > /tmp/diagnostics.json
+          jq -r '[.[] | select(.code == "Endpoint/NotConfigured") | .endpoint] | unique | .[]' /tmp/diagnostics.json > /tmp/unconfigured.txt
+          jq -r '[.[] | select(.level == "error" or .level == "fatal") | "\(.code): \(.message | split("\n")[0])"] | unique | .[]' /tmp/diagnostics.json > /tmp/errors.txt
+          unconfigured=$(grep -c . /tmp/unconfigured.txt || true)
+          errors=$(grep -c . /tmp/errors.txt || true)
+
+          if [ "$unconfigured" = 0 ] && [ "$errors" = 0 ]; then
+            echo "failed=false" >> "$GITHUB_OUTPUT"
+            echo "Endpoint coverage OK: every spec endpoint is in resources or unspecified_endpoints, and there are no error diagnostics."
+            exit 0
+          fi
+          echo "failed=true" >> "$GITHUB_OUTPUT"
+
+          # Pruned autoconfig diff (see the comment above).
+          yq -r '.unspecified_endpoints[]' "$cfg" \
+            | jq -R -s 'split("\n") | map(select(length > 0) | split(" ") | {method: .[0], path: .[1]})' > /tmp/skip.json
+          jq --slurpfile skip /tmp/skip.json '
+            reduce $skip[0][] as $e (.; del(.paths[$e.path][$e.method]))
+            | .paths |= with_entries(select(.value | length > 0))
+          ' "$spec" > /tmp/openapi.filtered.json
+          stlc autoconfig --spec /tmp/openapi.filtered.json --config "$cfg" > /dev/null
+          git --no-pager diff -- "$cfg" > /tmp/autoconfig.diff
+          git checkout -- "$cfg"
+
+          {
+            echo "## Endpoint coverage: ${unconfigured} unconfigured endpoint(s), ${errors} error diagnostic(s)"
+            echo
+            if [ "$unconfigured" != 0 ]; then
+              echo "These endpoints are in the spec but in neither \`resources\` nor \`unspecified_endpoints\` of \`${WORKSPACE}/${cfg}\`. Add each to \`resources\` to expose it in the SDKs, or to \`unspecified_endpoints\` to keep it out, and commit that to this PR's branch."
+              echo
+              sed 's/^/- `/; s/$/`/' /tmp/unconfigured.txt
+              echo
+            fi
+            if [ "$errors" != 0 ]; then
+              echo "Error diagnostics:"
+              echo
+              sed 's/^/- /' /tmp/errors.txt
+              echo
+            fi
+            echo "<details><summary>Config diff proposed by <code>stlc autoconfig</code> (pruned of <code>unspecified_endpoints</code>). Review the method names before committing: they become public API in every SDK.</summary>"
+            echo
+            echo '```diff'
+            cat /tmp/autoconfig.diff
+            echo '```'
+            echo
+            echo "</details>"
+          } > /tmp/endpoint-coverage.md
+          cat /tmp/endpoint-coverage.md
+          cat /tmp/endpoint-coverage.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Comment endpoint coverage report on PR
+        # `header` identifies the comment so subsequent runs update in place.
+        if: ${{ always() && github.event_name == 'pull_request' && steps.coverage.outputs.failed == 'true' }}
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: stlc-endpoint-coverage
+          path: /tmp/endpoint-coverage.md
+
+      - name: Remove the coverage comment once the gate passes
+        if: ${{ always() && github.event_name == 'pull_request' && steps.coverage.outputs.failed == 'false' }}
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: stlc-endpoint-coverage
+          delete: true
+
+      - name: Request a review from the owning team
+        # Needs the PAT: GITHUB_TOKEN cannot request reviews from a team, and a
+        # fine-grained PAT additionally needs the org "Members: read"
+        # permission for team reviewers. Best-effort: the failing check is what
+        # actually holds the merge.
+        if: ${{ always() && github.event_name == 'pull_request' && steps.coverage.outputs.failed == 'true' && inputs.coverage-review-team != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.SEAL_PR_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          TEAM: ${{ github.repository_owner }}/${{ inputs.coverage-review-team }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::warning::SEAL_PR_TOKEN is unset and GITHUB_TOKEN cannot request team reviews; no review requested from $TEAM."
+            exit 0
+          fi
+          gh pr edit "$PR" --repo "$REPO" --add-reviewer "$TEAM" \
+            || echo "::warning::Could not request a review from $TEAM (does the PAT have the org Members: read permission?)."
+
+      - name: Enforce endpoint coverage
+        if: ${{ always() && steps.coverage.outputs.failed == 'true' }}
+        run: |
+          echo "::error::The spec has endpoints missing from the Stainless config, or the build reported error diagnostics. See 'Endpoint coverage' in the job summary and add each endpoint to resources or unspecified_endpoints."
+          exit 1

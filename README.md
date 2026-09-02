@@ -77,9 +77,50 @@ scoped to just this repo (Contents: write, Pull requests: write) is enough; the
 workflows fall back to `GITHUB_TOKEN`, so nothing breaks — the seal-back PR just
 still needs a manual approval to run its check.
 
-No inputs are required. The config filename is read from the workspace's
-`workspace.json` (`stainless_config`), and `workspace` / `targets` default to
-`stainless` / `all`. Override them via `with:` only if a repo differs.
+### Config-repo inputs
+
+Only `publish-documented-spec` has required inputs (`source-repo`,
+`docs-spec-path`). Everything else is optional, and the config filename is
+always read from the workspace's `workspace.json` (`stainless_config`).
+
+| Input | Workflow | Default | Purpose |
+| --- | --- | --- | --- |
+| `workspace` | all | `stainless` | Path to the stlc workspace. |
+| `targets` | `stlc-generate`, `stlc-sync-tracking` | `all` | Targets to build / sync. |
+| `fail-on-unconfigured-endpoints` | `stlc-generate` | `false` | Endpoint coverage gate, see below. |
+| `coverage-review-team` | `stlc-generate` | `''` | Team slug to request a review from when the gate fails (needs `SEAL_PR_TOKEN`). |
+| `docs-config-path` | `publish-documented-spec` | `''` | Also publish the Stainless config to this path in the docs repo, in the same PR. |
+
+### Endpoint coverage gate
+
+Stainless only generates code for endpoints listed under `resources` in the
+config. A new endpoint in the spec is otherwise skipped with a note-level
+`Endpoint/NotConfigured` diagnostic, and `stlc build` still exits 0. With the
+upstream spec PRs auto-merging, that means new endpoints silently never reach
+the SDKs.
+
+With `fail-on-unconfigured-endpoints: true`, the `generate` job fails when
+the build reports any `Endpoint/NotConfigured` or any error-level diagnostic.
+`generate / generate` is the required check on the config repo's `main`, so
+auto-merge holds until someone commits a config decision to the PR branch:
+add the endpoint to `resources` (exposing it, with a deliberately chosen
+method name) or to `unspecified_endpoints` (keeping it out; the diagnostic
+becomes `Endpoint/IsIgnored`, which passes). On pull requests the job also
+posts a sticky comment with the list and the config diff `stlc autoconfig`
+proposes, and requests a review from `coverage-review-team`.
+
+The proposed diff is computed against a spec copy with the
+`unspecified_endpoints` operations removed, because `stlc autoconfig` (0.3.x)
+ignores that list and would otherwise re-add every deliberately excluded
+endpoint. The workflow commits nothing; the config is restored after the
+diff is taken.
+
+Before enabling the gate in a repo, make sure its config already covers every
+spec endpoint (run `stlc build` and check for `Endpoint/NotConfigured`),
+otherwise every PR fails immediately. The spec-publishing workflow in the
+upstream service repo should also stop force-pushing its PR branch while a
+PR is open, so the config commits people add to that PR survive the next
+release (see switchboard's `deploy-prod.yml`, job `publish-openapi-spec`).
 
 `setup-stlc` deliberately does **not** live here — each config repo keeps its
 own `.github/actions/setup-stlc`, so it can install only the language

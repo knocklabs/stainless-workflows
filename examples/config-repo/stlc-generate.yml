@@ -39,6 +39,13 @@ jobs:
     # with:
     #   workspace: stainless
     #   targets: all
+    #   # Endpoint coverage gate: fail the required check when the spec has
+    #   # endpoints in neither `resources` nor `unspecified_endpoints`, comment
+    #   # a triage report (pruned `stlc autoconfig` diff) on the PR and request
+    #   # a review from the team. Make sure the config already covers every
+    #   # endpoint before enabling. See README, "Endpoint coverage gate".
+    #   fail-on-unconfigured-endpoints: true
+    #   coverage-review-team: product
 
   # Publish the documented OpenAPI spec (transforms + code samples applied) to
   # knocklabs/docs as a PR. Runs in parallel with `generate` — it builds only the
@@ -68,6 +75,7 @@ jobs:
       #   api  config repo -> source-repo: switchboard, docs-spec-path: data/specs/api/openapi.yml
       source-repo: CHANGE_ME
       docs-spec-path: data/specs/CHANGE_ME/openapi.yml
-      # Optional — omit to accept the default:
-      # with:
+      # Optional — omit to accept the defaults:
       #   workspace: stainless
+      #   # Also publish the Stainless config next to the spec, same PR:
+      #   docs-config-path: data/specs/CHANGE_ME/stainless.yml
