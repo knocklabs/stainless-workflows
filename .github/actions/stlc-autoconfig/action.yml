@@ -1,0 +1,114 @@
+name: 'Refresh Stainless config with stlc autoconfig'
+description: >-
+  Runs `stlc autoconfig` in an stlc workspace so the Stainless config picks up
+  endpoints that are in the OpenAPI spec but not yet under `resources`.
+  Endpoints listed in the config's `unspecified_endpoints` are pruned from a
+  spec copy first (autoconfig 0.3.x ignores that list and would re-add them on
+  every run). Leaves the change UNCOMMITTED in the workspace and reports what
+  changed; the caller decides whether to commit, open a PR, or auto-merge.
+  Requirements: the workspace is inside a git checkout with a clean config
+  file (autoconfig refuses otherwise), and jq is on the runner (yq is
+  installed if missing). Only the stlc CLI is installed — autoconfig never
+  loads the per-language generators, so no language toolchains are needed.
+
+inputs:
+  workspace:
+    description: 'Path to the stlc workspace directory (contains workspace.json).'
+    required: true
+  stlc-read-token:
+    description: 'PAT with Contents: read on stainless/stlc* repos, used to install the stlc CLI.'
+    required: true
+  node-version:
+    description: 'Node.js version to install for the stlc CLI.'
+    required: false
+    default: '24'
+
+outputs:
+  changed:
+    description: '"true" when the config file differs after autoconfig.'
+    value: ${{ steps.autoconfig.outputs.changed }}
+  non-additive:
+    description: >-
+      "true" when the diff also removes or rewrites existing lines. autoconfig
+      only adds mappings, so this means a guessed name collided with an existing
+      method (which repoints that method at a different endpoint) or formatting
+      was rewritten. Needs careful review.
+    value: ${{ steps.autoconfig.outputs.non-additive }}
+  summary:
+    description: 'The "+ client.<resource>.<method>(...) // <endpoint>" lines autoconfig printed; empty when nothing was added.'
+    value: ${{ steps.autoconfig.outputs.summary }}
+  diff-file:
+    description: 'Path to a unified diff of the config change (empty file when unchanged).'
+    value: ${{ steps.autoconfig.outputs.diff-file }}
+
+runs:
+  using: composite
+  steps:
+    - name: Setup Node
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+
+    - name: Install the stlc CLI
+      # Mirrors the config repos' setup-stlc action, minus the language
+      # toolchains and generator packages: autoconfig needs the CLI only.
+      shell: bash
+      env:
+        STLC_READ_TOKEN: ${{ inputs.stlc-read-token }}
+      run: |
+        git_config_key="url.https://x-access-token:${STLC_READ_TOKEN}@github.com/stainless/.insteadOf"
+        cleanup_stlc_auth() { git config --global --unset-all "$git_config_key" || true; }
+        trap cleanup_stlc_auth EXIT
+        git config --global --add "$git_config_key" "https://github.com/stainless/"
+        npm install -g "git+https://x-access-token:${STLC_READ_TOKEN}@github.com/stainless/stlc.git"
+        stlc version
+
+    - name: Ensure jq and yq
+      shell: bash
+      run: |
+        command -v jq >/dev/null || { echo "::error::jq is required on the runner"; exit 1; }
+        if ! command -v yq >/dev/null; then
+          echo "yq not found on this runner; installing mikefarah/yq v4.44.3"
+          sudo curl -fsSL -o /usr/local/bin/yq "https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64"
+          sudo chmod +x /usr/local/bin/yq
+        fi
+
+    - name: Run stlc autoconfig against the pruned spec
+      id: autoconfig
+      shell: bash
+      working-directory: ${{ inputs.workspace }}
+      run: |
+        spec=$(jq -r .openapi_spec workspace.json)
+        cfg=$(jq -r .stainless_config workspace.json)
+        pruned="$RUNNER_TEMP/pruned.openapi.json"
+
+        # Hide the endpoints the config deliberately excludes, so autoconfig
+        # doesn't propose them. `// []` keeps this a no-op for configs without
+        # an `unspecified_endpoints` list.
+        jq --argjson drop "$(yq -o=json '.unspecified_endpoints // []' "$cfg")" '
+          reduce ($drop[] | split(" ")) as [$m, $p] (.;
+            del(.paths[$p][$m])
+            | if (.paths[$p] | type == "object" and length == 0) then del(.paths[$p]) else . end)' \
+          "$spec" > "$pruned"
+
+        stlc autoconfig --spec "$pruned" --config "$cfg" | tee "$RUNNER_TEMP/autoconfig-summary.txt"
+
+        diff_file="$RUNNER_TEMP/autoconfig.diff"
+        git diff -- "$cfg" > "$diff_file"
+        echo "diff-file=$diff_file" >> "$GITHUB_OUTPUT"
+
+        if [ -s "$diff_file" ]; then changed=true; else changed=false; fi
+        if grep -qE '^-[^-]' "$diff_file"; then non_additive=true; else non_additive=false; fi
+        echo "changed=$changed" >> "$GITHUB_OUTPUT"
+        echo "non-additive=$non_additive" >> "$GITHUB_OUTPUT"
+        {
+          echo "summary<<STLC_AUTOCONFIG_EOF"
+          grep -E '^\+ client\.' "$RUNNER_TEMP/autoconfig-summary.txt" || true
+          echo "STLC_AUTOCONFIG_EOF"
+        } >> "$GITHUB_OUTPUT"
+
+        echo "Stainless config changed: $changed (non-additive: $non_additive)"
+        if [ "$non_additive" = true ]; then
+          echo "::warning::stlc autoconfig removed or rewrote existing config lines — a guessed name probably collided with an existing method. Review the removed lines:"
+          grep -E '^-[^-]' "$diff_file" || true
+        fi

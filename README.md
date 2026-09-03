@@ -25,6 +25,7 @@ Two kinds of repos consume this:
 | `.github/workflows/trunk-sync-lock.yml` | staging SDK repos | `examples/sdk-repo/trunk-sync-lock.yml` |
 | `.github/workflows/seal-dispatch.yml` | staging SDK repos (optional) | `examples/sdk-repo/seal-dispatch.yml` |
 | `.github/workflows/trigger-back-sync-on-release.yml` | production SDK repos | `examples/sdk-repo/trigger-back-sync-on-release.yml` |
+| `.github/actions/stlc-autoconfig` (composite action) | service repos' spec-publish job (control, switchboard) | `examples/service-repo/publish-openapi-spec.yml` |
 
 ## This repo must be PUBLIC
 
@@ -117,10 +118,51 @@ diff is taken.
 
 Before enabling the gate in a repo, make sure its config already covers every
 spec endpoint (run `stlc build` and check for `Endpoint/NotConfigured`),
-otherwise every PR fails immediately. The spec-publishing workflow in the
-upstream service repo should also stop force-pushing its PR branch while a
-PR is open, so the config commits people add to that PR survive the next
-release (see switchboard's `deploy-prod.yml`, job `publish-openapi-spec`).
+otherwise every PR fails immediately. With the service-repo autoconfig flow
+below in place the gate is a backstop: it should never fire, and if it does,
+something slipped past autoconfig and review.
+
+## Service repos: spec PRs carry the Stainless config
+
+control (mAPI) and switchboard (API) publish each release's OpenAPI spec to
+their config repo as a PR from the `publish-openapi-spec` job in
+`deploy-prod.yml`. That job also refreshes the Stainless config with the shared
+composite action `.github/actions/stlc-autoconfig` (full job:
+`examples/service-repo/publish-openapi-spec.yml`):
+
+1. Clone the config repo (`main`) and copy the release's spec over
+   `stainless/openapi.json`.
+2. Run the action. It installs the stlc CLI, prunes the endpoints listed in the
+   config's `unspecified_endpoints` from a spec copy (autoconfig 0.3.x ignores
+   that list and would re-add them every run), runs `stlc autoconfig`, and
+   reports `changed`, `non-additive` and the "new methods" `summary`. A
+   failure fails the job: publishing a spec without its config is how new
+   endpoints silently never reach the SDKs.
+3. Commit spec and config together and open (or refresh) the PR.
+4. Arm auto-merge **only when the config did not change**. Otherwise the PR
+   body carries the summary and a review checklist, auto-merge is disabled
+   (also if an earlier spec-only refresh armed it), and the config repo's
+   `CODEOWNERS` entry for the config file requests the owning team.
+
+Why the review: the method and resource names autoconfig guesses become public
+API in every SDK and can't be renamed later without a breaking change; a
+`models:` entry for a schema the SDKs already ship renames generated types
+(breaking for typed consumers); and when a guessed name collides with an
+existing method, autoconfig overwrites that method's endpoint — the action
+flags this as `non-additive` and the PR body shows a warning. The PR title is
+the SDK commit subject, so a reviewer retitles to `feat!:` when a change is
+breaking and release-please cuts a major version.
+
+Each release recreates the PR branch from `main` (force-push), so review fixes
+pushed to the branch must land before the next release.
+
+Prerequisites: the `STLC_READ_TOKEN` secret in control and switchboard, `jq`
+on the runner (the action installs `yq` if missing), and a `.github/CODEOWNERS`
+in each config repo owning `stainless/openapi.stainless.yml`. To have GitHub
+enforce the review rather than just request it, enable "Require review from
+Code Owners" on the config repo's `main` ruleset with the required approval
+count left at 0: spec-only PRs keep auto-merging, config-touching PRs wait for
+an owner's approval.
 
 `setup-stlc` deliberately does **not** live here — each config repo keeps its
 own `.github/actions/setup-stlc`, so it can install only the language

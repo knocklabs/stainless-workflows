@@ -1,0 +1,136 @@
+# Job for a service repo's deploy-prod.yml (control → stainless-knock-mapi,
+# switchboard → stainless-knock-api): publish the release's OpenAPI spec to the
+# stlc config repo together with a refreshed Stainless config, as one PR.
+#
+# Auto-merge is armed ONLY when `stlc autoconfig` left the config unchanged.
+# When it added mappings (new endpoints), the PR is left for review with the
+# summary and a checklist in its body; the config repo's CODEOWNERS requests
+# the owning team. Each release recreates the branch from `main`, so review
+# fixes must be pushed before the next release.
+#
+# Replace every CHANGE_ME. Secrets: STLC_REPO_TOKEN (PAT with write on the
+# config repo) and STLC_READ_TOKEN (Contents: read on stainless/stlc*).
+  publish-openapi-spec:
+    runs-on: ubuntu-latest
+    needs: deploy
+    steps:
+      - name: Download OpenAPI spec
+        uses: actions/download-artifact@v4
+        with:
+          name: openapi.json
+
+      - name: Configure git
+        run: |
+          git config --global user.name "knock-eng-bot"
+          git config --global user.email "ops-development@knock.app"
+
+      - name: Clone the stlc config repo
+        run: |
+          git clone https://x-access-token:${{ secrets.STLC_REPO_TOKEN }}@github.com/knocklabs/CHANGE_ME_CONFIG_REPO.git
+
+      - name: Update spec in the config repo
+        run: |
+          cp openapi.json CHANGE_ME_CONFIG_REPO/stainless/openapi.json
+
+      - name: Refresh the Stainless config from the new spec
+        # Adds config mappings for endpoints that are new in this spec (minus
+        # the config's `unspecified_endpoints`). Leaves the change uncommitted;
+        # the commit below picks up both files. A failure fails the job:
+        # publishing a spec without its config is how new endpoints silently
+        # never reach the SDKs.
+        id: autoconfig
+        uses: knocklabs/stainless-workflows/.github/actions/stlc-autoconfig@main
+        with:
+          workspace: CHANGE_ME_CONFIG_REPO/stainless
+          stlc-read-token: ${{ secrets.STLC_READ_TOKEN }}
+
+      - name: Check for pending changes
+        id: pending_changes
+        working-directory: ./CHANGE_ME_CONFIG_REPO
+        run: |
+          if [[ -n "$(git status --porcelain)" ]]; then
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Push spec update branch
+        if: steps.pending_changes.outputs.has_changes == 'true'
+        working-directory: ./CHANGE_ME_CONFIG_REPO
+        run: |
+          git checkout -b CHANGE_ME_SOURCE-spec-update
+          git commit -am "feat: update CHANGE_ME spec to ${{ github.ref_name }}"
+          # Force-push: a newer release supersedes any still-open spec PR,
+          # including review fixes pushed to it — finish those before the
+          # next release.
+          git push --force origin CHANGE_ME_SOURCE-spec-update
+
+      - name: Open the spec PR; auto-merge only if the Stainless config is unchanged
+        if: steps.pending_changes.outputs.has_changes == 'true'
+        working-directory: ./CHANGE_ME_CONFIG_REPO
+        env:
+          # The PAT, not GITHUB_TOKEN: a merge attributed to GITHUB_TOKEN would
+          # not trigger the config repo's codegen workflow.
+          GH_TOKEN: ${{ secrets.STLC_REPO_TOKEN }}
+          CONFIG_CHANGED: ${{ steps.autoconfig.outputs.changed }}
+          NON_ADDITIVE: ${{ steps.autoconfig.outputs.non-additive }}
+          AUTOCONFIG_SUMMARY: ${{ steps.autoconfig.outputs.summary }}
+        run: |
+          branch=CHANGE_ME_SOURCE-spec-update
+          # The PR title becomes the commit subject on the SDK repos, which
+          # drives release-please version bumps — keep it a conventional
+          # commit (`feat:` → minor; a reviewer retitles to `feat!:` if the
+          # config change is breaking).
+          title="feat: update CHANGE_ME spec to ${{ github.ref_name }}"
+          body="$RUNNER_TEMP/pr-body.md"
+          echo "Automated spec publish from ${{ github.repository }} release (${{ github.ref_name }}). Merging triggers stlc codegen for the SDKs and the docs spec PR." > "$body"
+          if [ "$CONFIG_CHANGED" = "true" ]; then
+            cat >> "$body" <<'MD'
+
+          ## Stainless config changes (`stlc autoconfig`)
+
+          This spec has endpoints that were not in `stainless/openapi.stainless.yml`. autoconfig added mappings for them (endpoints in `unspecified_endpoints` are pruned first), so the config diff is part of this PR. **Auto-merge is off for this PR**: review the config diff and merge it manually.
+
+          New methods, as autoconfig named them:
+          MD
+            { echo '```'; printf '%s\n' "$AUTOCONFIG_SUMMARY"; echo '```'; } >> "$body"
+            cat >> "$body" <<'MD'
+
+          Review checklist:
+          - Method and resource names become public API in every SDK and can't be renamed later without a breaking change. Rename them on this branch if the guessed names don't fit the existing style.
+          - A `models:` entry for a schema the SDKs already ship renames its generated types (breaking for typed consumers). Drop it, or retitle this PR `feat!:` so release-please cuts a major version.
+          - To keep an endpoint out of the SDKs, move it to `unspecified_endpoints`.
+          - Push fixes to this branch before the next release: each release recreates the branch from `main`.
+          MD
+            if [ "$NON_ADDITIVE" = "true" ]; then
+              cat >> "$body" <<'MD'
+
+          > [!WARNING]
+          > The config diff is **not purely additive**: existing lines were removed or rewritten. autoconfig only adds mappings, so a guessed name most likely collided with an existing method and replaced its endpoint. Check every removed line before merging.
+          MD
+            fi
+          fi
+          pr_number=$(gh pr list --head "$branch" --state open --json number --jq '.[0].number // empty')
+          if [ -z "$pr_number" ]; then
+            gh pr create --base main --head "$branch" --title "$title" --body-file "$body"
+          else
+            echo "PR #$pr_number already open for $branch — refreshing it for this release"
+            gh pr edit "$pr_number" --title "$title" --body-file "$body"
+          fi
+          if [ "$CONFIG_CHANGED" = "true" ]; then
+            # Hands off: a human reviews the new mappings before this merges.
+            # Also disarm auto-merge left over from an earlier, spec-only
+            # refresh of the same PR.
+            gh pr merge "$branch" --disable-auto 2>/dev/null || true
+            echo "::notice::Stainless config changed in this release; the spec PR is left for review (auto-merge disabled)."
+            exit 0
+          fi
+          # Hands-off merge, squash-only. The preview build ("generate / generate")
+          # is a required check on the config repo's main, so --auto arms and
+          # GitHub completes the squash once it passes. Fallback: if nothing
+          # blocks the merge, merge directly.
+          if ! gh pr merge "$branch" --auto --squash; then
+            if ! gh pr merge "$branch" --squash; then
+              echo "::warning::Could not merge the spec PR — merge it manually on the config repo to trigger codegen."
+            fi
+          fi
