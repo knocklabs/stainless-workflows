@@ -19,7 +19,7 @@ name: Publish documented OpenAPI spec
 # other. The caller decides WHEN to publish (its job-level `if:`); this workflow
 # is trigger-agnostic.
 #
-# Optionally (`docs-config-path`) the Stainless config is published alongside
+# Optionally (`docs-stainless-path`) the Stainless config is published alongside
 # the spec, in the same PR, so the docs can see how endpoints map to SDK
 # methods and which ones are deliberately unexposed.
 on:
@@ -37,7 +37,7 @@ on:
         description: 'Path to the stainless workspace (contains workspace.json). Matches the stlc-generate default.'
         type: string
         default: stainless
-      docs-config-path:
+      docs-stainless-path:
         description: >-
           Optional destination path of the Stainless config inside the docs
           repo (e.g. "data/specs/api/stainless.yml"), committed in the same PR
@@ -73,7 +73,7 @@ jobs:
       # filename comes from targets.openapi.options.files in stainless.yml.
       DOCUMENTED_SPEC: ${{ inputs.workspace }}/sdks/openapi/openapi.documented.json
       WORKSPACE: ${{ inputs.workspace }}
-      DOCS_CONFIG_PATH: ${{ inputs['docs-config-path'] }}
+      DOCS_STAINLESS_PATH: ${{ inputs['docs-stainless-path'] }}
     steps:
       - name: Checkout config repo
         # No `repository:` → checks out the CALLER's config repo, bringing its
@@ -123,10 +123,10 @@ jobs:
             git checkout -b "$DOCS_BRANCH"
           fi
           cp ../openapi.documented.yaml "$DOCS_SPEC_PATH"
-          if [ -n "$DOCS_CONFIG_PATH" ]; then
+          if [ -n "$DOCS_STAINLESS_PATH" ]; then
             cfg=$(jq -r .stainless_config "../$WORKSPACE/workspace.json")
-            mkdir -p "$(dirname "$DOCS_CONFIG_PATH")"
-            cp "../$WORKSPACE/$cfg" "$DOCS_CONFIG_PATH"
+            mkdir -p "$(dirname "$DOCS_STAINLESS_PATH")"
+            cp "../$WORKSPACE/$cfg" "$DOCS_STAINLESS_PATH"
           fi
 
       - name: Check for pending changes

@@ -88,7 +88,7 @@ always read from the workspace's `workspace.json` (`stainless_config`).
 | --- | --- | --- | --- |
 | `workspace` | all | `stainless` | Path to the stlc workspace. |
 | `targets` | `stlc-generate`, `stlc-sync-tracking` | `all` | Targets to build / sync. |
-| `docs-config-path` | `publish-documented-spec` | `''` | Also publish the Stainless config to this path in the docs repo, in the same PR. |
+| `docs-stainless-path` | `publish-documented-spec` | `''` | Also publish the Stainless config to this path in the docs repo, in the same PR. |
 
 ## Service repos: spec PRs carry the Stainless config
 
