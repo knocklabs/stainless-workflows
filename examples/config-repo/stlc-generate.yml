@@ -68,7 +68,6 @@ jobs:
       #   api  config repo -> source-repo: switchboard, docs-spec-path: data/specs/api/openapi.yml
       source-repo: CHANGE_ME
       docs-spec-path: data/specs/CHANGE_ME/openapi.yml
-      # Optional — omit to accept the defaults:
+      docs-config-path: data/specs/CHANGE_ME/stainless.yml
+      # Optional — omit to accept the default:
       #   workspace: stainless
-      #   # Also publish the Stainless config next to the spec, same PR:
-      #   docs-config-path: data/specs/CHANGE_ME/stainless.yml
