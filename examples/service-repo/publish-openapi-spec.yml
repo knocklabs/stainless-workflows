@@ -19,8 +19,8 @@
     steps:
       - name: Download OpenAPI spec
         # However this repo produces it: same-run artifact (control) or an
-        # artifact from another workflow (switchboard). Must land as
-        # ./openapi.json, or pass `spec-file:` below.
+        # artifact from another workflow (switchboard). `spec-file` below must
+        # match where it lands.
         uses: actions/download-artifact@v4
         with:
           name: openapi.json
@@ -29,6 +29,7 @@
         uses: knocklabs/stainless-workflows/.github/actions/publish-openapi-spec@main
         with:
           config-repo: knocklabs/CHANGE_ME_CONFIG_REPO
+          spec-file: openapi.json
           source: CHANGE_ME_SOURCE          # branch: <source>-spec-update
           spec-label: CHANGE_ME_LABEL       # title: "feat: update <label> spec to <tag>"
           stlc-repo-token: ${{ secrets.STLC_REPO_TOKEN }}

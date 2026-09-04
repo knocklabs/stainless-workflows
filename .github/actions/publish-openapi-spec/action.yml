@@ -11,7 +11,7 @@ description: |
     list and would re-add them every run). A failure fails the step: publishing
     a spec without its config is how new endpoints silently never reach the SDKs.
   - Commits spec and config to `<source>-spec-update` and force-pushes it.
-  - Opens or refreshes the PR titled "feat: update <spec-label> spec to <release>".
+  - Opens or refreshes the PR titled "feat: update <spec-label> spec to <tag>".
   - Arms auto-merge ONLY when the config did not change. Otherwise the PR body
     carries autoconfig's "new methods" summary, a review checklist and (if
     existing lines were rewritten) a warning, auto-merge is disabled, and the
@@ -19,31 +19,24 @@ description: |
   Needs jq on the runner (yq is installed if missing).
 
 inputs:
-  spec-file:
-    description: 'Path, on the runner, of the downloaded OpenAPI spec.'
-    required: false
-    default: 'openapi.json'
   config-repo:
     description: 'The stlc config repo, e.g. "knocklabs/stainless-knock-api".'
     required: true
-  workspace:
-    description: 'Path of the stlc workspace inside the config repo (contains workspace.json).'
-    required: false
-    default: 'stainless'
+  spec-file:
+    description: 'Path, on the runner, of the OpenAPI spec the caller downloaded (e.g. "openapi.json"). Must match the download step''s output.'
+    required: true
   source:
     description: 'Short name of the calling service repo (e.g. "switchboard", "control"). Drives the branch name `<source>-spec-update`.'
     required: true
   spec-label:
     description: >-
       Label for the commit subject and PR title, "feat: update <spec-label>
-      spec to <release>" (e.g. "api", "mapi"). The title becomes the commit
-      subject on the SDK repos, which release-please reads, so it stays a
-      conventional commit; a reviewer retitles to `feat!:` for a major bump.
+      spec to <tag>" (e.g. "api", "mapi"); <tag> is the calling workflow's
+      ref name, i.e. the release tag on a release event. The title becomes
+      the commit subject on the SDK repos, which release-please reads, so it
+      stays a conventional commit; a reviewer retitles to `feat!:` for a
+      major bump.
     required: true
-  release:
-    description: 'Release tag or name for the commit subject and PR body. Defaults to the calling workflow''s ref name (the tag, on a release event).'
-    required: false
-    default: ${{ github.ref_name }}
   stlc-repo-token:
     description: >-
       PAT with Contents: write and Pull requests: write on the config repo,
@@ -54,6 +47,10 @@ inputs:
   stlc-read-token:
     description: 'PAT with Contents: read on stainless/stlc* repos, used to install the stlc CLI.'
     required: true
+  workspace:
+    description: 'Path of the stlc workspace inside the config repo (contains workspace.json).'
+    required: false
+    default: 'stainless'
 
 outputs:
   has-changes:
@@ -83,7 +80,6 @@ runs:
   using: composite
   steps:
     - name: Setup Node
-      # Only for the stlc CLI; callers don't run Node themselves.
       uses: actions/setup-node@v4
       with:
         node-version: '24'
@@ -144,9 +140,11 @@ runs:
         echo "config-file=$cfg" >> "$GITHUB_OUTPUT"
         pruned="$RUNNER_TEMP/pruned.openapi.json"
 
-        # Hide the endpoints the config deliberately excludes, so autoconfig
-        # doesn't propose them. `// []` keeps this a no-op for configs without
-        # an `unspecified_endpoints` list.
+        # WORKAROUND for an upstream stlc bug (0.3.x): unlike the Stainless SaaS,
+        # `stlc autoconfig` ignores `unspecified_endpoints` and would re-propose
+        # every excluded endpoint on each run, making "config unchanged" (and so
+        # auto-merge) unreachable. Prune them from a spec copy first; the real
+        # spec is what gets committed.
         jq --argjson drop "$(yq -o=json '.unspecified_endpoints // []' "$cfg")" '
           reduce ($drop[] | split(" ")) as [$m, $p] (.;
             del(.paths[$p][$m])
@@ -191,7 +189,7 @@ runs:
       working-directory: ${{ steps.clone.outputs.dir }}
       env:
         BRANCH: ${{ inputs.source }}-spec-update
-        SUBJECT: 'feat: update ${{ inputs.spec-label }} spec to ${{ inputs.release }}'
+        SUBJECT: 'feat: update ${{ inputs.spec-label }} spec to ${{ github.ref_name }}'
       run: |
         git checkout -q -b "$BRANCH"
         git commit -q -am "$SUBJECT"
@@ -209,9 +207,9 @@ runs:
         GH_TOKEN: ${{ inputs.stlc-repo-token }}
         REPO: ${{ inputs.config-repo }}
         BRANCH: ${{ inputs.source }}-spec-update
-        TITLE: 'feat: update ${{ inputs.spec-label }} spec to ${{ inputs.release }}'
+        TITLE: 'feat: update ${{ inputs.spec-label }} spec to ${{ github.ref_name }}'
         SOURCE_REPO: ${{ github.repository }}
-        RELEASE: ${{ inputs.release }}
+        RELEASE: ${{ github.ref_name }}
         CONFIG_PATH: ${{ inputs.workspace }}/${{ steps.autoconfig.outputs.config-file }}
         CONFIG_CHANGED: ${{ steps.autoconfig.outputs.changed }}
         NON_ADDITIVE: ${{ steps.autoconfig.outputs.non-additive }}
