@@ -1,19 +1,22 @@
 name: 'Publish OpenAPI spec and refreshed Stainless config to an stlc config repo'
-description: >-
-  Everything a service repo's `publish-openapi-spec` job does after downloading
-  the release's OpenAPI spec: clone the stlc config repo, copy the spec into
-  its workspace, refresh the Stainless config with `stlc autoconfig` (pruning
-  the endpoints listed in the config's `unspecified_endpoints`, which
-  autoconfig 0.3.x ignores and would otherwise re-add every run), commit spec
-  and config to a `<source>-spec-update` branch, force-push it, open or refresh
-  the PR, and arm auto-merge ONLY when the config did not change. When it did,
-  the PR body carries autoconfig's "new methods" summary, a review checklist
-  and (if existing lines were rewritten) a warning, auto-merge is disabled,
-  and the config repo's CODEOWNERS requests the owning team. An autoconfig
-  failure fails the step: publishing a spec without its config is how new
-  endpoints silently never reach the SDKs. Only the stlc CLI is installed —
-  autoconfig never loads the per-language generators. Needs jq on the runner
-  (yq is installed if missing).
+description: |
+  Publishes a release's OpenAPI spec to an stlc config repo together with a
+  refreshed Stainless config, as one PR. After the caller has downloaded the
+  spec, this action:
+  - Installs the stlc CLI (only the CLI: `stlc autoconfig` never loads the
+    per-language generators, so no language toolchains are needed).
+  - Clones the config repo's `main` and copies the spec into its workspace.
+  - Runs `stlc autoconfig`, first pruning the endpoints listed in the config's
+    `unspecified_endpoints` from a spec copy (autoconfig 0.3.x ignores that
+    list and would re-add them every run). A failure fails the step: publishing
+    a spec without its config is how new endpoints silently never reach the SDKs.
+  - Commits spec and config to `<source>-spec-update` and force-pushes it.
+  - Opens or refreshes the PR titled "feat: update <spec-label> spec to <release>".
+  - Arms auto-merge ONLY when the config did not change. Otherwise the PR body
+    carries autoconfig's "new methods" summary, a review checklist and (if
+    existing lines were rewritten) a warning, auto-merge is disabled, and the
+    config repo's CODEOWNERS requests the owning team.
+  Needs jq on the runner (yq is installed if missing).
 
 inputs:
   spec-file:
