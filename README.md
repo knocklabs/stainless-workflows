@@ -88,39 +88,7 @@ always read from the workspace's `workspace.json` (`stainless_config`).
 | --- | --- | --- | --- |
 | `workspace` | all | `stainless` | Path to the stlc workspace. |
 | `targets` | `stlc-generate`, `stlc-sync-tracking` | `all` | Targets to build / sync. |
-| `fail-on-unconfigured-endpoints` | `stlc-generate` | `false` | Endpoint coverage gate, see below. |
-| `coverage-review-team` | `stlc-generate` | `''` | Team slug to request a review from when the gate fails (needs `SEAL_PR_TOKEN`). |
 | `docs-config-path` | `publish-documented-spec` | `''` | Also publish the Stainless config to this path in the docs repo, in the same PR. |
-
-### Endpoint coverage gate
-
-Stainless only generates code for endpoints listed under `resources` in the
-config. A new endpoint in the spec is otherwise skipped with a note-level
-`Endpoint/NotConfigured` diagnostic, and `stlc build` still exits 0. With the
-upstream spec PRs auto-merging, that means new endpoints silently never reach
-the SDKs.
-
-With `fail-on-unconfigured-endpoints: true`, the `generate` job fails when
-the build reports any `Endpoint/NotConfigured` or any error-level diagnostic.
-`generate / generate` is the required check on the config repo's `main`, so
-auto-merge holds until someone commits a config decision to the PR branch:
-add the endpoint to `resources` (exposing it, with a deliberately chosen
-method name) or to `unspecified_endpoints` (keeping it out; the diagnostic
-becomes `Endpoint/IsIgnored`, which passes). On pull requests the job also
-posts a sticky comment with the list and the config diff `stlc autoconfig`
-proposes, and requests a review from `coverage-review-team`.
-
-The proposed diff is computed against a spec copy with the
-`unspecified_endpoints` operations removed, because `stlc autoconfig` (0.3.x)
-ignores that list and would otherwise re-add every deliberately excluded
-endpoint. The workflow commits nothing; the config is restored after the
-diff is taken.
-
-Before enabling the gate in a repo, make sure its config already covers every
-spec endpoint (run `stlc build` and check for `Endpoint/NotConfigured`),
-otherwise every PR fails immediately. With the service-repo autoconfig flow
-below in place the gate is a backstop: it should never fire, and if it does,
-something slipped past autoconfig and review.
 
 ## Service repos: spec PRs carry the Stainless config
 
