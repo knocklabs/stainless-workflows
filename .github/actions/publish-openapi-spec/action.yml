@@ -54,22 +54,7 @@ inputs:
     default: 'stainless'
 
 outputs:
-  has-changes:
-    description: '"true" when the spec or the config differ from the config repo''s main (a PR was pushed).'
-    value: ${{ steps.changes.outputs.has-changes }}
-  config-changed:
-    description: '"true" when `stlc autoconfig` changed the config.'
-    value: ${{ steps.autoconfig.outputs.changed }}
-  non-additive:
-    description: >-
-      "true" when the config diff also removes or rewrites existing lines.
-      autoconfig only adds mappings, so this means a guessed name collided with
-      an existing method (repointing it at a different endpoint). Flagged in
-      the PR body.
-    value: ${{ steps.autoconfig.outputs.non-additive }}
-  summary:
-    description: 'The "+ client.<resource>.<method>(...) // <endpoint>" lines autoconfig printed; empty when nothing was added.'
-    value: ${{ steps.autoconfig.outputs.summary }}
+  # Not consumed by any caller today, but could be used for Slack notifications.
   pr-url:
     description: 'URL of the spec PR; empty when there was nothing to publish.'
     value: ${{ steps.pr.outputs.pr-url }}

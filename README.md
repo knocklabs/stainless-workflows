@@ -157,8 +157,7 @@ major version.
 
 Each release recreates the PR branch from `main` (force-push), so review fixes
 pushed to the branch must land before the next release. The action exposes
-`pr-url`, `has-changes`, `config-changed`, `non-additive`, `summary` and
-`auto-merge` outputs for callers that want to notify.
+`pr-url` and `auto-merge` outputs for callers that want to notify.
 
 Prerequisites: the `STLC_READ_TOKEN` and `STLC_REPO_TOKEN` secrets in control
 and switchboard, `jq` and `yq` on the runner (both preinstalled on GitHub-hosted
