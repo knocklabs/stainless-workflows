@@ -161,9 +161,9 @@ pushed to the branch must land before the next release. The action exposes
 `auto-merge` outputs for callers that want to notify.
 
 Prerequisites: the `STLC_READ_TOKEN` and `STLC_REPO_TOKEN` secrets in control
-and switchboard (the action installs `jq` and `yq` itself if the runner image
-lacks them), and a `.github/CODEOWNERS` in each config repo owning
-`stainless/openapi.stainless.yml`.
+and switchboard, `jq` and `yq` on the runner (both preinstalled on GitHub-hosted
+and Blacksmith Ubuntu images), and a `.github/CODEOWNERS` in each config repo
+owning `stainless/openapi.stainless.yml`.
 To have GitHub enforce the review rather than just request it, enable "Require
 review from Code Owners" on the config repo's `main` ruleset with the required
 approval count left at 0: spec-only PRs keep auto-merging, config-touching PRs

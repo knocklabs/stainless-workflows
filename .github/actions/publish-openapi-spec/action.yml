@@ -16,7 +16,8 @@ description: |
     carries autoconfig's "new methods" summary, a review checklist and (if
     existing lines were rewritten) a warning, auto-merge is disabled, and the
     config repo's CODEOWNERS requests the owning team.
-  Installs jq and yq if the runner image lacks them.
+  Needs jq and yq (mikefarah v4), both preinstalled on GitHub-hosted and
+  Blacksmith Ubuntu runner images.
 
 inputs:
   config-repo:
@@ -98,23 +99,6 @@ runs:
         npm install -g "git+https://x-access-token:${STLC_READ_TOKEN}@github.com/stainless/stlc.git"
         stlc version
 
-    - name: Ensure jq and yq
-      # Both are preinstalled on GitHub-hosted and Blacksmith Ubuntu images;
-      # install pinned static binaries into a runner-local bin (no sudo) if a
-      # runner image lacks one.
-      shell: bash
-      run: |
-        bin="$RUNNER_TEMP/bin"; mkdir -p "$bin"; echo "$bin" >> "$GITHUB_PATH"
-        case "$(uname -m)" in x86_64) arch=amd64 ;; aarch64|arm64) arch=arm64 ;; *) echo "::error::unsupported arch $(uname -m)"; exit 1 ;; esac
-        if ! command -v jq >/dev/null; then
-          echo "jq not found; installing jq 1.7.1"
-          curl -fsSL -o "$bin/jq" "https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-${arch}" && chmod +x "$bin/jq"
-        fi
-        if ! command -v yq >/dev/null; then
-          echo "yq not found; installing mikefarah/yq v4.44.3"
-          curl -fsSL -o "$bin/yq" "https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_${arch}" && chmod +x "$bin/yq"
-        fi
-
     - name: Configure git
       shell: bash
       run: |
@@ -143,6 +127,8 @@ runs:
         cp "$SPEC_FILE" "$WORKSPACE/$(jq -r .openapi_spec "$WORKSPACE/workspace.json")"
 
     - name: Refresh the Stainless config with stlc autoconfig
+      # Needs jq (also used by the copy step above) and mikefarah yq v4. Both
+      # are preinstalled on GitHub-hosted and Blacksmith Ubuntu runner images.
       id: autoconfig
       shell: bash
       working-directory: ${{ steps.clone.outputs.dir }}/${{ inputs.workspace }}
