@@ -38,13 +38,9 @@ inputs:
       conventional commit; a reviewer retitles to `feat!:` for a major bump.
     required: true
   release:
-    description: 'Release tag or name for the commit subject and PR body. Defaults to the calling workflow''s ref name.'
+    description: 'Release tag or name for the commit subject and PR body. Defaults to the calling workflow''s ref name (the tag, on a release event).'
     required: false
     default: ${{ github.ref_name }}
-  base-branch:
-    description: 'Base branch in the config repo.'
-    required: false
-    default: 'main'
   stlc-repo-token:
     description: >-
       PAT with Contents: write and Pull requests: write on the config repo,
@@ -55,20 +51,10 @@ inputs:
   stlc-read-token:
     description: 'PAT with Contents: read on stainless/stlc* repos, used to install the stlc CLI.'
     required: true
-  git-user-name:
-    required: false
-    default: 'knock-eng-bot'
-  git-user-email:
-    required: false
-    default: 'ops-development@knock.app'
-  node-version:
-    description: 'Node.js version to install for the stlc CLI.'
-    required: false
-    default: '24'
 
 outputs:
   has-changes:
-    description: '"true" when the spec or the config differ from the config repo''s base branch (a PR was pushed).'
+    description: '"true" when the spec or the config differ from the config repo''s main (a PR was pushed).'
     value: ${{ steps.changes.outputs.has-changes }}
   config-changed:
     description: '"true" when `stlc autoconfig` changed the config.'
@@ -94,9 +80,10 @@ runs:
   using: composite
   steps:
     - name: Setup Node
+      # Only for the stlc CLI; callers don't run Node themselves.
       uses: actions/setup-node@v4
       with:
-        node-version: ${{ inputs.node-version }}
+        node-version: '24'
 
     - name: Install the stlc CLI
       # Mirrors the config repos' setup-stlc action, minus the language
@@ -128,18 +115,16 @@ runs:
       env:
         REPO: ${{ inputs.config-repo }}
         TOKEN: ${{ inputs.stlc-repo-token }}
-        BASE: ${{ inputs.base-branch }}
         SPEC_FILE: ${{ inputs.spec-file }}
         WORKSPACE: ${{ inputs.workspace }}
-        GIT_USER_NAME: ${{ inputs.git-user-name }}
-        GIT_USER_EMAIL: ${{ inputs.git-user-email }}
       run: |
         [ -f "$SPEC_FILE" ] || { echo "::error::spec file not found: $SPEC_FILE"; exit 1; }
         dir="$RUNNER_TEMP/stlc-config-repo"
         rm -rf "$dir"
-        git clone --quiet --branch "$BASE" "https://x-access-token:${TOKEN}@github.com/${REPO}.git" "$dir"
-        git -C "$dir" config user.name "$GIT_USER_NAME"
-        git -C "$dir" config user.email "$GIT_USER_EMAIL"
+        git clone --quiet --branch main "https://x-access-token:${TOKEN}@github.com/${REPO}.git" "$dir"
+        # Same bot identity every Knock stlc workflow commits with.
+        git -C "$dir" config user.name "knock-eng-bot"
+        git -C "$dir" config user.email "ops-development@knock.app"
         # The workspace declares the spec filename (workspace.json); copy the
         # artifact as-is over it — no format conversion.
         spec=$(jq -r .openapi_spec "$dir/$WORKSPACE/workspace.json")
@@ -194,7 +179,7 @@ runs:
           echo "has-changes=true" >> "$GITHUB_OUTPUT"
         else
           echo "has-changes=false" >> "$GITHUB_OUTPUT"
-          echo "Spec and config already match ${{ inputs.config-repo }}@${{ inputs.base-branch }}; nothing to publish."
+          echo "Spec and config already match ${{ inputs.config-repo }}@main; nothing to publish."
         fi
 
     - name: Commit and force-push the spec update branch
@@ -220,7 +205,6 @@ runs:
       env:
         GH_TOKEN: ${{ inputs.stlc-repo-token }}
         REPO: ${{ inputs.config-repo }}
-        BASE: ${{ inputs.base-branch }}
         BRANCH: ${{ inputs.source }}-spec-update
         TITLE: 'feat: update ${{ inputs.spec-label }} spec to ${{ inputs.release }}'
         SOURCE_REPO: ${{ github.repository }}
@@ -250,7 +234,7 @@ runs:
         - Method and resource names become public API in every SDK and can't be renamed later without a breaking change. Rename them on this branch if the guessed names don't fit the existing style.
         - A `models:` entry for a schema the SDKs already ship renames its generated types (breaking for typed consumers). Drop it, or retitle this PR `feat!:` so release-please cuts a major version.
         - To keep an endpoint out of the SDKs, move it to `unspecified_endpoints`.
-        - Push fixes to this branch before the next release: each release recreates the branch from the base branch.
+        - Push fixes to this branch before the next release: each release recreates the branch from `main`.
         MD
           if [ "$NON_ADDITIVE" = "true" ]; then
             cat >> "$body" <<'MD'
@@ -263,7 +247,7 @@ runs:
 
         pr_number=$(gh pr list --repo "$REPO" --head "$BRANCH" --state open --json number --jq '.[0].number // empty')
         if [ -z "$pr_number" ]; then
-          gh pr create --repo "$REPO" --base "$BASE" --head "$BRANCH" --title "$TITLE" --body-file "$body"
+          gh pr create --repo "$REPO" --base main --head "$BRANCH" --title "$TITLE" --body-file "$body"
         else
           echo "PR #$pr_number already open for $BRANCH — refreshing it for this release"
           gh pr edit "$pr_number" --repo "$REPO" --title "$TITLE" --body-file "$body"
