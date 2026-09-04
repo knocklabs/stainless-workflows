@@ -16,7 +16,7 @@ description: |
     carries autoconfig's "new methods" summary, a review checklist and (if
     existing lines were rewritten) a warning, auto-merge is disabled, and the
     config repo's CODEOWNERS requests the owning team.
-  Needs jq on the runner (yq is installed if missing).
+  Installs jq and yq if the runner image lacks them.
 
 inputs:
   config-repo:
@@ -99,36 +99,48 @@ runs:
         stlc version
 
     - name: Ensure jq and yq
+      # Both are preinstalled on GitHub-hosted and Blacksmith Ubuntu images;
+      # install pinned static binaries into a runner-local bin (no sudo) if a
+      # runner image lacks one.
       shell: bash
       run: |
-        command -v jq >/dev/null || { echo "::error::jq is required on the runner"; exit 1; }
+        bin="$RUNNER_TEMP/bin"; mkdir -p "$bin"; echo "$bin" >> "$GITHUB_PATH"
+        case "$(uname -m)" in x86_64) arch=amd64 ;; aarch64|arm64) arch=arm64 ;; *) echo "::error::unsupported arch $(uname -m)"; exit 1 ;; esac
+        if ! command -v jq >/dev/null; then
+          echo "jq not found; installing jq 1.7.1"
+          curl -fsSL -o "$bin/jq" "https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-${arch}" && chmod +x "$bin/jq"
+        fi
         if ! command -v yq >/dev/null; then
-          echo "yq not found on this runner; installing mikefarah/yq v4.44.3"
-          sudo curl -fsSL -o /usr/local/bin/yq "https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64"
-          sudo chmod +x /usr/local/bin/yq
+          echo "yq not found; installing mikefarah/yq v4.44.3"
+          curl -fsSL -o "$bin/yq" "https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_${arch}" && chmod +x "$bin/yq"
         fi
 
-    - name: Clone the config repo and copy the spec in
+    - name: Configure git
+      shell: bash
+      run: |
+        git config --global user.name "knock-eng-bot"
+        git config --global user.email "ops-development@knock.app"
+
+    - name: Clone the config repo
       id: clone
       shell: bash
       env:
         REPO: ${{ inputs.config-repo }}
         TOKEN: ${{ inputs.stlc-repo-token }}
-        SPEC_FILE: ${{ inputs.spec-file }}
-        WORKSPACE: ${{ inputs.workspace }}
       run: |
-        [ -f "$SPEC_FILE" ] || { echo "::error::spec file not found: $SPEC_FILE"; exit 1; }
         dir="$RUNNER_TEMP/stlc-config-repo"
         rm -rf "$dir"
         git clone --quiet --branch main "https://x-access-token:${TOKEN}@github.com/${REPO}.git" "$dir"
-        # Same bot identity every Knock stlc workflow commits with.
-        git -C "$dir" config user.name "knock-eng-bot"
-        git -C "$dir" config user.email "ops-development@knock.app"
-        # The workspace declares the spec filename (workspace.json); copy the
-        # artifact as-is over it — no format conversion.
-        spec=$(jq -r .openapi_spec "$dir/$WORKSPACE/workspace.json")
-        cp "$SPEC_FILE" "$dir/$WORKSPACE/$spec"
         echo "dir=$dir" >> "$GITHUB_OUTPUT"
+
+    - name: Copy the openapi spec into the stainless config repo
+      shell: bash
+      env:
+        SPEC_FILE: ${{ inputs.spec-file }}
+        WORKSPACE: ${{ steps.clone.outputs.dir }}/${{ inputs.workspace }}
+      run: |
+        [ -f "$SPEC_FILE" ] || { echo "::error::spec file not found: $SPEC_FILE"; exit 1; }
+        cp "$SPEC_FILE" "$WORKSPACE/$(jq -r .openapi_spec "$WORKSPACE/workspace.json")"
 
     - name: Refresh the Stainless config with stlc autoconfig
       id: autoconfig
@@ -151,8 +163,18 @@ runs:
             | if (.paths[$p] | type == "object" and length == 0) then del(.paths[$p]) else . end)' \
           "$spec" > "$pruned"
 
+        # tee: keep autoconfig's output in the job log AND capture it, so the
+        # "+ client.<resource>.<method>(...)" lines can go into the PR body
+        # below. pipefail is on, so an autoconfig failure still fails the step.
         stlc autoconfig --spec "$pruned" --config "$cfg" | tee "$RUNNER_TEMP/autoconfig-summary.txt"
 
+        # Classify what autoconfig did to the config, for the PR step and the
+        # action's outputs:
+        #   changed      - the stainless config file differs (any diff at all)
+        #   non-additive - the diff also removes/rewrites existing lines; since
+        #                  autoconfig only adds mappings, that means a potential
+        #                  name collision with an existing method (see warning)
+        #   summary      - the "+ client.…" lines from the output captured above
         diff_file="$RUNNER_TEMP/autoconfig.diff"
         git diff -- "$cfg" > "$diff_file"
         if [ -s "$diff_file" ]; then changed=true; else changed=false; fi
@@ -167,7 +189,7 @@ runs:
 
         echo "Stainless config changed: $changed (non-additive: $non_additive)"
         if [ "$non_additive" = true ]; then
-          echo "::warning::stlc autoconfig removed or rewrote existing config lines — a guessed name probably collided with an existing method. Removed lines:"
+          echo "::warning::stlc autoconfig removed or rewrote existing config lines:"
           grep -E '^-[^-]' "$diff_file" || true
         fi
 
@@ -193,9 +215,7 @@ runs:
       run: |
         git checkout -q -b "$BRANCH"
         git commit -q -am "$SUBJECT"
-        # Force-push: a newer release supersedes any still-open spec PR,
-        # including review fixes pushed to it — land those before the next
-        # release.
+        # Force-push: a newer release supersedes any still-open spec PR.
         git push --force --quiet origin "$BRANCH"
 
     - name: Open or refresh the PR; auto-merge only if the config is unchanged
@@ -222,7 +242,7 @@ runs:
             echo
             echo '## Stainless config changes (`stlc autoconfig`)'
             echo
-            echo "This spec has endpoints that were not in \`${CONFIG_PATH}\`. autoconfig added mappings for them (endpoints in \`unspecified_endpoints\` are pruned first), so the config diff is part of this PR. **Auto-merge is off for this PR**: review the config diff and merge it manually."
+            echo "This spec has endpoints that were not in \`${CONFIG_PATH}\`. autoconfig added mappings for them (endpoints in \`unspecified_endpoints\` are excluded), so the config diff is part of this PR. **Auto-merge is off for this PR**: review the config diff and merge it manually."
             echo
             echo "New methods, as autoconfig named them:"
             echo '```'
@@ -232,8 +252,8 @@ runs:
           cat >> "$body" <<'MD'
 
         Review checklist:
-        - Method and resource names become public API in every SDK and can't be renamed later without a breaking change. Rename them on this branch if the guessed names don't fit the existing style.
-        - A `models:` entry for a schema the SDKs already ship renames its generated types (breaking for typed consumers). Drop it, or retitle this PR `feat!:` so release-please cuts a major version.
+        - Method and resource names become public API in every SDK and can't be renamed later without a breaking change. Rename them on this branch if the generated names don't fit the existing style.
+        - New `models:` entries are fine for schemas this release introduced. For a schema the SDKs already expose, naming it renames its generated type in every SDK; keep it only if that's intended, and mention it in the PR description.
         - To keep an endpoint out of the SDKs, move it to `unspecified_endpoints`.
         - Push fixes to this branch before the next release: each release recreates the branch from `main`.
         MD
@@ -241,11 +261,13 @@ runs:
             cat >> "$body" <<'MD'
 
         > [!WARNING]
-        > The config diff is **not purely additive**: existing lines were removed or rewritten. autoconfig only adds mappings, so a guessed name most likely collided with an existing method and replaced its endpoint. Check every removed line before merging.
+        > The config diff is **not purely additive**: existing lines were removed or rewritten. autoconfig only adds entries, so a removed line means a new method or model got the same name as an existing one and replaced it, and the old endpoint or schema silently drops out of the SDKs. Don't merge as-is: restore the removed line and give the new entry a different name. Formatting-only rewrites can be ignored.
         MD
           fi
         fi
 
+        # Open a new PR, or if the previous release's PR is still open, retitle
+        # and re-describe it for this release.
         pr_number=$(gh pr list --repo "$REPO" --head "$BRANCH" --state open --json number --jq '.[0].number // empty')
         if [ -z "$pr_number" ]; then
           gh pr create --repo "$REPO" --base main --head "$BRANCH" --title "$TITLE" --body-file "$body"
@@ -256,20 +278,20 @@ runs:
         echo "pr-url=$(gh pr view "$BRANCH" --repo "$REPO" --json url --jq .url)" >> "$GITHUB_OUTPUT"
 
         if [ "$CONFIG_CHANGED" = "true" ]; then
-          # Hands off: a human reviews the new mappings before this merges
-          # (the config repo's CODEOWNERS requests the owning team). Also
-          # disarm auto-merge left over from an earlier, spec-only refresh of
-          # the same PR.
+          # Stainless config changed: don't auto-merge; a human reviews and
+          # merges (the config repo's CODEOWNERS requests the owning team).
+          # --disable-auto clears auto-merge armed by an earlier, spec-only
+          # refresh of the same PR.
           gh pr merge "$BRANCH" --repo "$REPO" --disable-auto 2>/dev/null || true
           echo "auto-merge=held" >> "$GITHUB_OUTPUT"
           echo "::notice::Stainless config changed in this release; the spec PR is left for review (auto-merge disabled)."
           exit 0
         fi
-        # Hands-off merge, squash-only. The config repo's required check
-        # ("generate / generate") gates it: --auto arms and GitHub completes the
-        # squash once it passes. Fallback: if nothing blocks the merge (arming
-        # fails with "clean status", e.g. the required check was removed),
-        # merge directly.
+        # Stainless config unchanged: auto-merge without manual review. --auto
+        # squash-merges once the config repo's required check
+        # ("generate / generate") passes. If arming fails because nothing
+        # blocks the merge (e.g. the required check was removed), merge
+        # directly instead.
         if gh pr merge "$BRANCH" --repo "$REPO" --auto --squash; then
           echo "auto-merge=armed" >> "$GITHUB_OUTPUT"
         elif gh pr merge "$BRANCH" --repo "$REPO" --squash; then
