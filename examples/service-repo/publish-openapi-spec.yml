@@ -1,0 +1,36 @@
+# Job for a service repo's deploy-prod.yml (control -> stainless-knock-mapi,
+# switchboard -> stainless-knock-api): publish the release's OpenAPI spec to the
+# stlc config repo together with a refreshed Stainless config, as one PR.
+#
+# Everything after the download lives in the shared composite action: clone,
+# copy, `stlc autoconfig` (pruning the config's `unspecified_endpoints`),
+# commit, force-push, open/refresh the PR. Auto-merge is armed ONLY when the
+# config is unchanged; otherwise the PR is left for review with autoconfig's
+# summary and a checklist in its body, and the config repo's CODEOWNERS
+# requests the owning team. Each release recreates the branch from `main`, so
+# review fixes must be pushed before the next release.
+#
+# Replace every CHANGE_ME. Secrets: STLC_REPO_TOKEN (PAT with Contents: write +
+# Pull requests: write on the config repo) and STLC_READ_TOKEN (Contents: read
+# on stainless/stlc*). Job-level `needs` / `if` / `runs-on` stay per repo.
+  publish-openapi-spec:
+    runs-on: ubuntu-latest
+    needs: deploy
+    steps:
+      - name: Download OpenAPI spec
+        # However this repo produces it: same-run artifact (control) or an
+        # artifact from another workflow (switchboard). `spec-file` below must
+        # match where it lands.
+        uses: actions/download-artifact@v4
+        with:
+          name: openapi.json
+
+      - name: Publish the spec and refreshed Stainless config to the config repo
+        uses: knocklabs/stainless-workflows/.github/actions/publish-openapi-spec@main
+        with:
+          config-repo: knocklabs/CHANGE_ME_CONFIG_REPO
+          spec-file: openapi.json
+          source: CHANGE_ME_SOURCE          # branch: <source>-spec-update
+          spec-label: CHANGE_ME_LABEL       # title: "feat: update <label> spec to <tag>"
+          stlc-repo-token: ${{ secrets.STLC_REPO_TOKEN }}
+          stlc-read-token: ${{ secrets.STLC_READ_TOKEN }}
