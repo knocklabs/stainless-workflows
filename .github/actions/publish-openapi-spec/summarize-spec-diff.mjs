@@ -12,7 +12,7 @@ import path from 'node:path'
 
 const execFileAsync = promisify(execFile)
 
-export const MODEL_ID = 'claude-haiku-4-5-20251001'
+export const MODEL_ID = 'claude-haiku-5-5'
 const MAX_CHANGES = 40
 const MAX_OPS_PER_CHANGE = 8
 const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages'
@@ -473,8 +473,11 @@ async function callModel({ apiKey, model, payload, fetchImpl }) {
     },
     body: JSON.stringify({
       model: model || MODEL_ID,
-      max_tokens: 512,
-      temperature: 0,
+      max_tokens: 1024,
+      // Haiku 5.5 rejects any temperature other than 1, and adaptive thinking
+      // is on unless effort is lowered. Forced tool_choice returns the changelog
+      // tool call with no thinking block.
+      output_config: { effort: 'low' },
       tools: [TOOL],
       tool_choice: { type: 'tool', name: 'changelog_summary' },
       messages: [{ role: 'user', content: promptFor(payload) }],

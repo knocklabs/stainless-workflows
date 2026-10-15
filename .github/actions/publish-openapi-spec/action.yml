@@ -13,7 +13,7 @@ description: |
   - Commits spec and config to `<source>-spec-update` and force-pushes it.
   - Opens or refreshes the PR. The title stays "feat: update <spec-label> spec
     to <tag>" unless changelog-model-api-key is set and the spec diff has
-    behavioral changes, in which case Claude Haiku 4.5 writes one SDK-facing
+    behavioral changes, in which case Claude Haiku 5.5 writes one SDK-facing
     subject such as "feat: delay steps can wait for a weekly time window
     (v0.1.1696)". Description-only edits keep the version title. Breaking
     findings are a PR warning; this action never writes "feat!:".
@@ -46,16 +46,16 @@ inputs:
     required: true
   changelog-model-api-key:
     description: >-
-      Optional Anthropic API key. When set, Claude Haiku 4.5 rewrites the
+      Optional Anthropic API key. When set, Claude Haiku 5.5 rewrites the
       OpenAPI diff into the PR title, which release-please prints as the SDK
       changelog line. When unset, the title stays "feat: update <spec-label>
       spec to <tag>". A model failure also keeps that title.
     required: false
     default: ''
   changelog-model:
-    description: 'Anthropic model id used to summarize the spec diff. Pinned to Claude Haiku 4.5.'
+    description: 'Anthropic model id used to summarize the spec diff. Pinned to Claude Haiku 5.5.'
     required: false
-    default: 'claude-haiku-4-5-20251001'
+    default: 'claude-haiku-5-5'
   stlc-repo-token:
     description: >-
       PAT with Contents: write and Pull requests: write on the config repo,

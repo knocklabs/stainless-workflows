@@ -13,6 +13,7 @@ import {
   collapseChanges,
   fallbackTitle,
   isNoiseChange,
+  MODEL_ID,
   summarize,
   writeGithubOutput,
 } from './summarize-spec-diff.mjs'
@@ -279,6 +280,32 @@ test('missing model key keeps the version title and still describes the diff', a
   assert.equal(result.title, 'feat: update mapi spec to v0.1.1696')
   assert.match(result.bodyNotes, /No changelog model key/)
   assert.match(result.bodyNotes, /DelayTimeWindow/)
+})
+
+test('the changelog request uses Haiku 5.5 without a temperature', async () => {
+  let body
+  await summarize({
+    previous: path.join(fixtures, 'delay-time-window', 'before.json'),
+    current: path.join(fixtures, 'delay-time-window', 'after.json'),
+    oasdiff: await ensureOasdiff(),
+    specLabel: 'mapi',
+    version: 'v0.1.1696',
+    apiKey: 'test-key',
+    fetchImpl: async (_url, init) => {
+      body = JSON.parse(init.body)
+      return toolResponse({
+        subject: 'feat: delay steps can wait for a weekly time window',
+        bullets: ['add delay_until_time_windows on delay steps'],
+        breaking: false,
+      })()
+    },
+  })
+  assert.equal(body.model, MODEL_ID)
+  assert.equal(MODEL_ID, 'claude-haiku-5-5')
+  assert.equal(body.temperature, undefined)
+  assert.equal(body.top_p, undefined)
+  assert.equal(body.output_config.effort, 'low')
+  assert.equal(body.tool_choice.type, 'tool')
 })
 
 test('subjects that are too short, too long, or not conventional commits are rejected', () => {

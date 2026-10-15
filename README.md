@@ -109,7 +109,7 @@ action `.github/actions/publish-openapi-spec` (full job:
    and opens or refreshes the PR. The title is a conventional commit, and it
    becomes the SDK changelog line release-please prints. With
    `changelog-model-api-key` set, oasdiff summarizes the spec bump and Claude
-   Haiku 4.5 (`claude-haiku-4-5-20251001`) rewrites that into one subject, for
+   Haiku 5.5 (`claude-haiku-5-5`) rewrites that into one subject, for
    example `feat: delay steps can wait for a weekly time window (v0.1.1696)`.
    Description-only edits, a missing key, or a model failure keep
    `feat: update <label> spec to <tag>`. The OpenAPI diff goes in the PR body.
