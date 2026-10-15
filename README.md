@@ -108,8 +108,9 @@ action `.github/actions/publish-openapi-spec` (full job:
 3. Commits spec and config together to `<source>-spec-update`, force-pushes,
    and opens or refreshes the PR. The title is a conventional commit, and it
    becomes the SDK changelog line release-please prints. With
-   `changelog-model-api-key` set, oasdiff summarizes the spec bump and Claude
-   Haiku 5.5 (`claude-haiku-5-5`) rewrites that into one subject, for
+   `ai-gateway-api-key` set, oasdiff summarizes the spec bump and the Vercel
+   AI Gateway calls Claude Haiku 5.5 (`anthropic/claude-haiku-5.5`) to rewrite
+   that into one subject, for
    example `feat: delay steps can wait for a weekly time window (v0.1.1696)`.
    Description-only edits, a missing key, or a model failure keep
    `feat: update <label> spec to <tag>`. The OpenAPI diff goes in the PR body.
@@ -138,8 +139,8 @@ Prerequisites: the `STLC_READ_TOKEN` and `STLC_REPO_TOKEN` secrets in control
 and switchboard, `jq` and `yq` on the runner (both preinstalled on GitHub-hosted
 and Blacksmith Ubuntu images), and a `.github/CODEOWNERS` in each config repo
 owning `stainless/openapi.stainless.yml`.
-Optional: `CHANGELOG_MODEL_API_KEY` (an Anthropic key) on those service repos,
-passed as `changelog-model-api-key`, enables the SDK changelog summary.
+Optional: `AI_GATEWAY_API_KEY` (a Vercel AI Gateway key) on those service repos,
+passed as `ai-gateway-api-key`, enables the SDK changelog summary.
 Without it, spec PRs keep the version-only title.
 To have GitHub enforce the review rather than just request it, enable "Require
 review from Code Owners" on the config repo's `main` ruleset with the required

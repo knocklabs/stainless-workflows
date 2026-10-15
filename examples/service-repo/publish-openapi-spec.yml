@@ -12,7 +12,7 @@
 #
 # Replace every CHANGE_ME. Secrets: STLC_REPO_TOKEN (PAT with Contents: write +
 # Pull requests: write on the config repo) and STLC_READ_TOKEN (Contents: read
-# on stainless/stlc*). Optional CHANGELOG_MODEL_API_KEY (Anthropic) makes the
+# on stainless/stlc*). Optional AI_GATEWAY_API_KEY (Vercel AI Gateway) makes the
 # PR title describe the OpenAPI diff instead of only the spec version.
 # Job-level `needs` / `if` / `runs-on` stay per repo.
   publish-openapi-spec:
@@ -37,4 +37,4 @@
           stlc-repo-token: ${{ secrets.STLC_REPO_TOKEN }}
           stlc-read-token: ${{ secrets.STLC_READ_TOKEN }}
           # Optional. Unset keeps the version-only title above.
-          changelog-model-api-key: ${{ secrets.CHANGELOG_MODEL_API_KEY }}
+          ai-gateway-api-key: ${{ secrets.AI_GATEWAY_API_KEY }}

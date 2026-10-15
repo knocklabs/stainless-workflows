@@ -12,7 +12,7 @@ description: |
     a spec without its config is how new endpoints silently never reach the SDKs.
   - Commits spec and config to `<source>-spec-update` and force-pushes it.
   - Opens or refreshes the PR. The title stays "feat: update <spec-label> spec
-    to <tag>" unless changelog-model-api-key is set and the spec diff has
+    to <tag>" unless ai-gateway-api-key is set and the spec diff has
     behavioral changes, in which case Claude Haiku 5.5 writes one SDK-facing
     subject such as "feat: delay steps can wait for a weekly time window
     (v0.1.1696)". Description-only edits keep the version title. Breaking
@@ -41,21 +41,22 @@ inputs:
       workflow's ref name, i.e. the release tag on a release event. The title
       becomes the commit subject on the SDK repos, which release-please reads,
       so it stays a conventional commit; a reviewer retitles to `feat!:` for a
-      major bump. When changelog-model-api-key is set, a behavioral spec diff
+      major bump. When ai-gateway-api-key is set, a behavioral spec diff
       replaces this fallback with a one-line summary that still ends in the tag.
     required: true
-  changelog-model-api-key:
+  ai-gateway-api-key:
     description: >-
-      Optional Anthropic API key. When set, Claude Haiku 5.5 rewrites the
-      OpenAPI diff into the PR title, which release-please prints as the SDK
-      changelog line. When unset, the title stays "feat: update <spec-label>
-      spec to <tag>". A model failure also keeps that title.
+      Optional Vercel AI Gateway API key. When set, the OpenAPI diff is
+      summarized through the gateway (Claude Haiku 5.5) into the PR title,
+      which release-please prints as the SDK changelog line. When unset, the
+      title stays "feat: update <spec-label> spec to <tag>". A model failure
+      also keeps that title.
     required: false
     default: ''
   changelog-model:
-    description: 'Anthropic model id used to summarize the spec diff. Pinned to Claude Haiku 5.5.'
+    description: 'AI Gateway model id (provider/model) used to summarize the spec diff. Pinned to Claude Haiku 5.5.'
     required: false
-    default: 'claude-haiku-5-5'
+    default: 'anthropic/claude-haiku-5.5'
   stlc-repo-token:
     description: >-
       PAT with Contents: write and Pull requests: write on the config repo,
@@ -235,7 +236,7 @@ runs:
         OASDIFF: ${{ steps.oasdiff.outputs.bin }}
         SPEC_LABEL: ${{ inputs.spec-label }}
         VERSION: ${{ github.ref_name }}
-        CHANGELOG_MODEL_API_KEY: ${{ inputs.changelog-model-api-key }}
+        AI_GATEWAY_API_KEY: ${{ inputs.ai-gateway-api-key }}
         CHANGELOG_MODEL: ${{ inputs.changelog-model }}
         FALLBACK: 'feat: update ${{ inputs.spec-label }} spec to ${{ github.ref_name }}'
       run: |

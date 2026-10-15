@@ -12,10 +12,10 @@ import path from 'node:path'
 
 const execFileAsync = promisify(execFile)
 
-export const MODEL_ID = 'claude-haiku-5-5'
+export const MODEL_ID = 'anthropic/claude-haiku-5.5'
 const MAX_CHANGES = 40
 const MAX_OPS_PER_CHANGE = 8
-const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages'
+export const GATEWAY_URL = 'https://ai-gateway.vercel.sh/v1/messages'
 
 const TOOL = {
   name: 'changelog_summary',
@@ -370,7 +370,7 @@ export function renderBody({ payload, bullets, reason }) {
   return `${lines.join('\n').trim()}\n`
 }
 
-const NO_KEY_REASON = 'No changelog model key is configured, so the commit subject keeps the spec version. The notes below are the OpenAPI diff.'
+const NO_KEY_REASON = 'No AI Gateway API key is configured, so the commit subject keeps the spec version. The notes below are the OpenAPI diff.'
 const INVALID_REASON = 'The changelog subject fell back to the spec version because the summary was missing or invalid.'
 
 export function summaryFromModel({ payload, specLabel, version, modelInput, failureReason }) {
@@ -464,11 +464,11 @@ function parseJsonContent(text) {
 
 async function callModel({ apiKey, model, payload, fetchImpl }) {
   const fetchFn = fetchImpl ?? globalThis.fetch
-  const response = await fetchFn(ANTHROPIC_URL, {
+  const response = await fetchFn(GATEWAY_URL, {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
-      'x-api-key': apiKey,
+      authorization: `Bearer ${apiKey}`,
       'anthropic-version': '2023-06-01',
     },
     body: JSON.stringify({
@@ -611,7 +611,7 @@ async function main() {
     specLabel: args['spec-label'],
     version: args.version,
     methods,
-    apiKey: process.env.CHANGELOG_MODEL_API_KEY || '',
+    apiKey: process.env.AI_GATEWAY_API_KEY || '',
     model: process.env.CHANGELOG_MODEL || MODEL_ID,
   })
   if (args['github-output']) {

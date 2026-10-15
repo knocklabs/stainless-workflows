@@ -13,6 +13,7 @@ import {
   collapseChanges,
   fallbackTitle,
   isNoiseChange,
+  GATEWAY_URL,
   MODEL_ID,
   summarize,
   writeGithubOutput,
@@ -278,11 +279,13 @@ test('missing model key keeps the version title and still describes the diff', a
   })
   assert.equal(called, false)
   assert.equal(result.title, 'feat: update mapi spec to v0.1.1696')
-  assert.match(result.bodyNotes, /No changelog model key/)
+  assert.match(result.bodyNotes, /No AI Gateway API key/)
   assert.match(result.bodyNotes, /DelayTimeWindow/)
 })
 
-test('the changelog request uses Haiku 5.5 without a temperature', async () => {
+test('the changelog request goes through the Vercel AI Gateway', async () => {
+  let url
+  let headers
   let body
   await summarize({
     previous: path.join(fixtures, 'delay-time-window', 'before.json'),
@@ -291,7 +294,9 @@ test('the changelog request uses Haiku 5.5 without a temperature', async () => {
     specLabel: 'mapi',
     version: 'v0.1.1696',
     apiKey: 'test-key',
-    fetchImpl: async (_url, init) => {
+    fetchImpl: async (requestUrl, init) => {
+      url = requestUrl
+      headers = init.headers
       body = JSON.parse(init.body)
       return toolResponse({
         subject: 'feat: delay steps can wait for a weekly time window',
@@ -300,8 +305,12 @@ test('the changelog request uses Haiku 5.5 without a temperature', async () => {
       })()
     },
   })
+  assert.equal(url, GATEWAY_URL)
+  assert.equal(url, 'https://ai-gateway.vercel.sh/v1/messages')
+  assert.equal(headers.authorization, 'Bearer test-key')
+  assert.equal(headers['x-api-key'], undefined)
   assert.equal(body.model, MODEL_ID)
-  assert.equal(MODEL_ID, 'claude-haiku-5-5')
+  assert.equal(MODEL_ID, 'anthropic/claude-haiku-5.5')
   assert.equal(body.temperature, undefined)
   assert.equal(body.top_p, undefined)
   assert.equal(body.output_config.effort, 'low')
