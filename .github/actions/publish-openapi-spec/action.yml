@@ -11,7 +11,12 @@ description: |
     list and would re-add them every run). A failure fails the step: publishing
     a spec without its config is how new endpoints silently never reach the SDKs.
   - Commits spec and config to `<source>-spec-update` and force-pushes it.
-  - Opens or refreshes the PR titled "feat: update <spec-label> spec to <tag>".
+  - Opens or refreshes the PR. The title stays "feat: update <spec-label> spec
+    to <tag>" unless changelog-model-api-key is set and the spec diff has
+    behavioral changes, in which case Claude Haiku 4.5 writes one SDK-facing
+    subject such as "feat: delay steps can wait for a weekly time window
+    (v0.1.1696)". Description-only edits keep the version title. Breaking
+    findings are a PR warning; this action never writes "feat!:".
   - Arms auto-merge ONLY when the config did not change. Otherwise the PR body
     carries autoconfig's "new methods" summary, a review checklist and (if
     existing lines were rewritten) a warning, auto-merge is disabled, and the
@@ -31,13 +36,26 @@ inputs:
     required: true
   spec-label:
     description: >-
-      Label for the commit subject and PR title, "feat: update <spec-label>
-      spec to <tag>" (e.g. "api", "mapi"); <tag> is the calling workflow's
-      ref name, i.e. the release tag on a release event. The title becomes
-      the commit subject on the SDK repos, which release-please reads, so it
-      stays a conventional commit; a reviewer retitles to `feat!:` for a
-      major bump.
+      Label for the fallback commit subject and PR title, "feat: update
+      <spec-label> spec to <tag>" (e.g. "api", "mapi"); <tag> is the calling
+      workflow's ref name, i.e. the release tag on a release event. The title
+      becomes the commit subject on the SDK repos, which release-please reads,
+      so it stays a conventional commit; a reviewer retitles to `feat!:` for a
+      major bump. When changelog-model-api-key is set, a behavioral spec diff
+      replaces this fallback with a one-line summary that still ends in the tag.
     required: true
+  changelog-model-api-key:
+    description: >-
+      Optional Anthropic API key. When set, Claude Haiku 4.5 rewrites the
+      OpenAPI diff into the PR title, which release-please prints as the SDK
+      changelog line. When unset, the title stays "feat: update <spec-label>
+      spec to <tag>". A model failure also keeps that title.
+    required: false
+    default: ''
+  changelog-model:
+    description: 'Anthropic model id used to summarize the spec diff. Pinned to Claude Haiku 4.5.'
+    required: false
+    default: 'claude-haiku-4-5-20251001'
   stlc-repo-token:
     description: >-
       PAT with Contents: write and Pull requests: write on the config repo,
@@ -103,13 +121,24 @@ runs:
         echo "dir=$dir" >> "$GITHUB_OUTPUT"
 
     - name: Copy the openapi spec into the stainless config repo
+      id: copy
       shell: bash
       env:
         SPEC_FILE: ${{ inputs.spec-file }}
         WORKSPACE: ${{ steps.clone.outputs.dir }}/${{ inputs.workspace }}
       run: |
         [ -f "$SPEC_FILE" ] || { echo "::error::spec file not found: $SPEC_FILE"; exit 1; }
-        cp "$SPEC_FILE" "$WORKSPACE/$(jq -r .openapi_spec "$WORKSPACE/workspace.json")"
+        spec_name=$(jq -r .openapi_spec "$WORKSPACE/workspace.json")
+        dest="$WORKSPACE/$spec_name"
+        previous="$RUNNER_TEMP/openapi.previous.json"
+        if [ -f "$dest" ]; then
+          cp "$dest" "$previous"
+          echo "previous-spec=$previous" >> "$GITHUB_OUTPUT"
+        else
+          echo "previous-spec=" >> "$GITHUB_OUTPUT"
+        fi
+        cp "$SPEC_FILE" "$dest"
+        echo "spec-path=$dest" >> "$GITHUB_OUTPUT"
 
     - name: Refresh the Stainless config with stlc autoconfig
       # Needs jq (also used by the copy step above) and mikefarah yq v4. Both
@@ -176,16 +205,73 @@ runs:
           echo "Spec and config already match ${{ inputs.config-repo }}@main; nothing to publish."
         fi
 
+    - name: Install oasdiff
+      if: steps.changes.outputs.has-changes == 'true'
+      id: oasdiff
+      continue-on-error: true
+      shell: bash
+      run: |
+        version=1.33.0
+        case "$(uname -m)" in
+          x86_64) arch=linux_amd64 ;;
+          aarch64|arm64) arch=linux_arm64 ;;
+          *) echo "::warning::unsupported arch $(uname -m); changelog title will keep the spec version"; exit 1 ;;
+        esac
+        dir="$RUNNER_TEMP/oasdiff-v${version}"
+        mkdir -p "$dir"
+        curl -fsSL -o "$dir/oasdiff.tar.gz" "https://github.com/oasdiff/oasdiff/releases/download/v${version}/oasdiff_${version}_${arch}.tar.gz"
+        tar -xzf "$dir/oasdiff.tar.gz" -C "$dir"
+        echo "bin=$dir/oasdiff" >> "$GITHUB_OUTPUT"
+        "$dir/oasdiff" --version
+
+    - name: Summarize the OpenAPI diff for the changelog
+      if: steps.changes.outputs.has-changes == 'true'
+      id: summary
+      continue-on-error: true
+      shell: bash
+      env:
+        PREVIOUS: ${{ steps.copy.outputs.previous-spec }}
+        CURRENT: ${{ steps.copy.outputs.spec-path }}
+        OASDIFF: ${{ steps.oasdiff.outputs.bin }}
+        SPEC_LABEL: ${{ inputs.spec-label }}
+        VERSION: ${{ github.ref_name }}
+        CHANGELOG_MODEL_API_KEY: ${{ inputs.changelog-model-api-key }}
+        CHANGELOG_MODEL: ${{ inputs.changelog-model }}
+        FALLBACK: 'feat: update ${{ inputs.spec-label }} spec to ${{ github.ref_name }}'
+      run: |
+        # A missing diff or a model failure must not block the spec publish.
+        # The commit step reads the title output and falls back when it is empty.
+        if [ ! -f "$PREVIOUS" ] || [ ! -f "$CURRENT" ]; then
+          echo "title=$FALLBACK" >> "$GITHUB_OUTPUT"
+          echo "fallback=true" >> "$GITHUB_OUTPUT"
+          echo "breaking=false" >> "$GITHUB_OUTPUT"
+          echo "::warning::Could not compare specs; changelog title keeps the spec version."
+          exit 0
+        fi
+        node "${{ github.action_path }}/summarize-spec-diff.mjs" \
+          --previous "$PREVIOUS" \
+          --current "$CURRENT" \
+          --oasdiff "$OASDIFF" \
+          --spec-label "$SPEC_LABEL" \
+          --version "$VERSION" \
+          --methods-file "$RUNNER_TEMP/autoconfig-summary.txt" \
+          --github-output "$GITHUB_OUTPUT"
+
     - name: Commit and force-push the spec update branch
       if: steps.changes.outputs.has-changes == 'true'
       shell: bash
       working-directory: ${{ steps.clone.outputs.dir }}
       env:
         BRANCH: ${{ inputs.source }}-spec-update
-        SUBJECT: 'feat: update ${{ inputs.spec-label }} spec to ${{ github.ref_name }}'
+        TITLE: ${{ steps.summary.outputs.title }}
+        FALLBACK: 'feat: update ${{ inputs.spec-label }} spec to ${{ github.ref_name }}'
       run: |
         git checkout -q -b "$BRANCH"
-        git commit -q -am "$SUBJECT"
+        subject="${TITLE:-$FALLBACK}"
+        subject="${subject//$'\n'/ }"
+        # -F reads the message from a file so the title is not shell-evaluated.
+        printf '%s\n' "$subject" > "$RUNNER_TEMP/spec-pr-title.txt"
+        git commit -q -a -F "$RUNNER_TEMP/spec-pr-title.txt"
         # Force-push: a newer release supersedes any still-open spec PR.
         git push --force --quiet origin "$BRANCH"
 
@@ -198,7 +284,9 @@ runs:
         GH_TOKEN: ${{ inputs.stlc-repo-token }}
         REPO: ${{ inputs.config-repo }}
         BRANCH: ${{ inputs.source }}-spec-update
-        TITLE: 'feat: update ${{ inputs.spec-label }} spec to ${{ github.ref_name }}'
+        TITLE: ${{ steps.summary.outputs.title }}
+        FALLBACK: 'feat: update ${{ inputs.spec-label }} spec to ${{ github.ref_name }}'
+        BODY_NOTES: ${{ steps.summary.outputs.body-notes }}
         SOURCE_REPO: ${{ github.repository }}
         RELEASE: ${{ github.ref_name }}
         CONFIG_PATH: ${{ inputs.workspace }}/${{ steps.autoconfig.outputs.config-file }}
@@ -207,7 +295,13 @@ runs:
         AUTOCONFIG_SUMMARY: ${{ steps.autoconfig.outputs.summary }}
       run: |
         body="$RUNNER_TEMP/pr-body.md"
+        title="${TITLE:-$FALLBACK}"
+        title="${title//$'\n'/ }"
+        printf '%s\n' "$title" > "$RUNNER_TEMP/spec-pr-title.txt"
         echo "Automated spec publish from ${SOURCE_REPO} release (${RELEASE}). Merging triggers stlc codegen for the SDKs and the docs spec PR." > "$body"
+        if [ -n "$BODY_NOTES" ]; then
+          printf '\n%s\n' "$BODY_NOTES" >> "$body"
+        fi
         if [ "$CONFIG_CHANGED" = "true" ]; then
           {
             echo
@@ -241,10 +335,10 @@ runs:
         # and re-describe it for this release.
         pr_number=$(gh pr list --repo "$REPO" --head "$BRANCH" --state open --json number --jq '.[0].number // empty')
         if [ -z "$pr_number" ]; then
-          gh pr create --repo "$REPO" --base main --head "$BRANCH" --title "$TITLE" --body-file "$body"
+          gh pr create --repo "$REPO" --base main --head "$BRANCH" --title "$(cat "$RUNNER_TEMP/spec-pr-title.txt")" --body-file "$body"
         else
           echo "PR #$pr_number already open for $BRANCH — refreshing it for this release"
-          gh pr edit "$pr_number" --repo "$REPO" --title "$TITLE" --body-file "$body"
+          gh pr edit "$pr_number" --repo "$REPO" --title "$(cat "$RUNNER_TEMP/spec-pr-title.txt")" --body-file "$body"
         fi
         echo "pr-url=$(gh pr view "$BRANCH" --repo "$REPO" --json url --jq .url)" >> "$GITHUB_OUTPUT"
 

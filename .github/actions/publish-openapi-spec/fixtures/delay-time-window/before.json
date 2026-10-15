@@ -1,0 +1,113 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "Knock Management API",
+    "version": "1.0"
+  },
+  "paths": {
+    "/v1/workflows/{workflow_key}": {
+      "put": {
+        "operationId": "upsertWorkflow",
+        "summary": "Upsert a workflow",
+        "responses": {
+          "200": {
+            "description": "ok",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowDelayStep"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowDelayStep"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "WorkflowDelayStep": {
+        "type": "object",
+        "title": "WorkflowDelayStep",
+        "description": "A workflow step that waits.",
+        "properties": {
+          "settings": {
+            "description": "The settings for the delay step. Both fields can be set to compute a delay where `delay_for` is an offset from the `delay_until_field_path`.",
+            "properties": {
+              "delay_for": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/Duration"
+                  },
+                  {
+                    "nullable": true,
+                    "x-struct": null,
+                    "x-validate": null
+                  }
+                ],
+                "description": "A duration object that describes how long to wait before proceeding to the next step.",
+                "type": "object",
+                "x-struct": null,
+                "x-validate": null
+              },
+              "delay_until_field_path": {
+                "description": "When set will use the path to resolve the delay into a timestamp from the property referenced",
+                "example": "recipient.delay_until",
+                "type": "string",
+                "x-struct": null,
+                "x-validate": null
+              },
+              "workflow_version_mode": {
+                "description": "Whether the delay is pinned to the opening workflow version or continues on the latest compatible version when the delay elapses. One of: `pinned` or `latest`. New delay steps default to `latest`. Configs that omit the field hydrate as `pinned`.",
+                "enum": [
+                  "pinned",
+                  "latest"
+                ],
+                "example": "latest",
+                "nullable": true,
+                "type": "string",
+                "x-struct": null,
+                "x-validate": null
+              }
+            },
+            "type": "object",
+            "x-struct": null,
+            "x-validate": null
+          }
+        }
+      },
+      "UnrelatedWidget": {
+        "type": "object",
+        "description": "A widget that does not change between these specs.",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "DESCRIPTION_SENTINEL_OLD"
+          }
+        }
+      },
+      "Duration": {
+        "type": "object",
+        "description": "A duration.",
+        "properties": {
+          "value": {
+            "type": "integer"
+          },
+          "unit": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}
