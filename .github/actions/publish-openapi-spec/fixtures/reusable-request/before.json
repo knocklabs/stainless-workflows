@@ -1,0 +1,80 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "Knock Management API",
+    "version": "1.0"
+  },
+  "paths": {
+    "/v1/commits/{id}": {
+      "get": {
+        "operationId": "getCommit",
+        "summary": "Get a commit",
+        "responses": {
+          "200": {
+            "description": "ok",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommitResource"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "CommitResource": {
+        "description": "The resource object associated with the commit.",
+        "example": {
+          "identifier": "my-email-layout",
+          "type": "email_layout"
+        },
+        "properties": {
+          "identifier": {
+            "description": "The unique identifier for the resource.",
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          },
+          "type": {
+            "description": "The type of the resource object.",
+            "enum": [
+              "audience",
+              "email_layout",
+              "guide",
+              "message_type",
+              "partial",
+              "translation",
+              "workflow"
+            ],
+            "example": "workflow",
+            "type": "string",
+            "x-struct": null,
+            "x-validate": null
+          }
+        },
+        "required": [
+          "identifier",
+          "type"
+        ],
+        "title": "CommitResource",
+        "type": "object",
+        "x-struct": null,
+        "x-validate": null
+      },
+      "UnrelatedWidget": {
+        "type": "object",
+        "description": "A widget that does not change between these specs.",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "DESCRIPTION_SENTINEL_OLD"
+          }
+        }
+      }
+    }
+  }
+}

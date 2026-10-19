@@ -12,7 +12,9 @@
 #
 # Replace every CHANGE_ME. Secrets: STLC_REPO_TOKEN (PAT with Contents: write +
 # Pull requests: write on the config repo) and STLC_READ_TOKEN (Contents: read
-# on stainless/stlc*). Job-level `needs` / `if` / `runs-on` stay per repo.
+# on stainless/stlc*). Optional AI_GATEWAY_API_KEY (Vercel AI Gateway) makes the
+# PR title describe the OpenAPI diff instead of only the spec version.
+# Job-level `needs` / `if` / `runs-on` stay per repo.
   publish-openapi-spec:
     runs-on: ubuntu-latest
     needs: deploy
@@ -31,6 +33,8 @@
           config-repo: knocklabs/CHANGE_ME_CONFIG_REPO
           spec-file: openapi.json
           source: CHANGE_ME_SOURCE          # branch: <source>-spec-update
-          spec-label: CHANGE_ME_LABEL       # title: "feat: update <label> spec to <tag>"
+          spec-label: CHANGE_ME_LABEL       # fallback title: "feat: update <label> spec to <tag>"
           stlc-repo-token: ${{ secrets.STLC_REPO_TOKEN }}
           stlc-read-token: ${{ secrets.STLC_READ_TOKEN }}
+          # Optional. Unset keeps the version-only title above.
+          ai-gateway-api-key: ${{ secrets.AI_GATEWAY_API_KEY }}
